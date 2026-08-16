@@ -318,17 +318,29 @@ async function deleteSession(ctx, sessionId) {
   // 0) 处理 live session（DSH 内存中的 Session 对象）。
   //    若会话仍在 ctx.sessions（agent 结束后会话保持 attached），仅删文件不会让
   //    DSH 前端移除它：session.list 的 live 部分仍返回它，侧边栏显示"复活"。
-  //    - 正在运行（有活跃 agent）→ 拒绝删除；
-  //    - 空闲 live → 先 detachEntered 从内存移除，触发 session/disposed →
-  //      api-proxy 推送 host/session-removed → 前端侧边栏立即移除。
+  //    - 真正运行中（agent.status === "running"）→ 拒绝删除；
+  //    - 空闲 live（agent idle 或没有 agent）→ 先 detachEntered 从内存移除，
+  //      触发 session/disposed → api-proxy 推送 host/session-removed → 前端
+  //      侧边栏立即移除；DSH 的 agent-loop 也会在 session/disposed 时自动
+  //      清理关联的 idle agent（checkReleased）。
   //    必须"先 detach、后删文件"：避免 DSH 后续 flush 该会话把日志写回磁盘。
   const sessionsSvc = ctx.get("sessions");
   if (sessionsSvc !== undefined) {
     const live = sessionsSvc.get(sessionId);
     if (live !== undefined) {
+      // 只拒绝真正 running 的 agent；idle agent（agent 存在但 status 非
+      // "running"）视为空闲，允许删除。
+      let running = false;
       const agents = ctx.get("agents");
-      const active = agents !== undefined ? agents.get(sessionId) : undefined;
-      if (active !== undefined) {
+      if (agents !== undefined) {
+        try {
+          const agent = agents.get(sessionId);
+          if (agent !== undefined) running = agent.status === "running";
+        } catch {
+          /* 无法读取状态时不阻止删除 */
+        }
+      }
+      if (running) {
         return { ok: false, code: "session-running", message: "该会话正在运行，请先停止或等待结束后再删除" };
       }
       try {
