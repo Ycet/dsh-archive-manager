@@ -57,23 +57,23 @@ DSH 的会话归档状态持久化在 `~/.dsh/storages/workspace.json`（workspa
 ```mermaid
 flowchart LR
     subgraph Browser
-        A[设置 → 归档页 settings.section] -- fetch 同源 JSON --> R
-        A -- React UI: 分组/筛选/排序/确认弹窗 --> A
-        R[Host webServer 路由] --> A
+        A["设置 → 归档页 settings.section"] -->|"fetch 同源 JSON"| R
+        A -->|"React UI: 分组/筛选/排序/确认弹窗"| A
+        R["Host webServer 路由"] --> A
     end
 
     subgraph Host
-        R -- /api/archive-manager/list --> H1[读 workspace 领域 + 会话 header/标题]
-        R -- /api/archive-manager/unarchive --> H2[从 archivedSessionIds 移除]
-        R -- /api/archive-manager/delete --> H3[移除归档+记账, 删日志目录]
-        R -- /api/archive-manager/delete-all --> H4[逐个删除全部归档]
+        R -->|"/api/archive-manager/list"| H1["读 workspace 领域 + 会话 header/标题"]
+        R -->|"/api/archive-manager/unarchive"| H2["从 archivedSessionIds 移除"]
+        R -->|"/api/archive-manager/delete"| H3["移除归档+记账, 删日志目录"]
+        R -->|"/api/archive-manager/delete-all"| H4["逐个删除全部归档"]
     end
 
-    H1 --> WS[storageDomain.get('workspace')]
-    H1 --> SP[sessionPersistence / sessionQuery]
+    H1 --> WS["storageDomain.get('workspace')"]
+    H1 --> SP["sessionPersistence / sessionQuery"]
     H2 --> WS
     H3 --> WS
-    H3 --> FS[fs.rm 删除会话日志目录]
+    H3 --> FS["fs.rm 删除会话日志目录"]
     H4 --> H3
 ```
 
