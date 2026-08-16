@@ -131,6 +131,7 @@ dsh plugin --profile web remove dsh-archive-manager
 - **运行中即时生效**：写入 global 会触发 `domain/changed`，DSH 会向浏览器推送 `host/archived-sessions-changed`，侧边栏与归档页即时刷新。
 - **内存缓存一致性（已修复）**：DSH 的 `WorkspaceRegistry` 是单一写入者，其 `archivedSessionIds` getter 直接读内存 `state`。本插件改写存储时会**同步更新 `registry.state.archivedSessionIds`**，并用官方 `WorkspaceEntity.detachSession` 移除工作区记账（同时更新 entity.record 缓存）；因此取消归档后再归档、硬刷新重建基线都不会出现会话消失/不显示的问题。
 - **仅支持归档会话**：删除/取消归档前会校验该会话确实存在于 `archivedSessionIds`，对未归档会话不会操作。
+- **live 会话处理（已修复）**：agent 结束后的会话仍会作为 live Session 留在 DSH 内存（`ctx.sessions`），仅删文件不会让前端移除它（`session.list` 的 live 部分仍返回，侧边栏显示"复活"）。删除时若会话是 live：正在运行（有活跃 agent）→ **拒绝删除**并提示先停止；空闲 live → 先调用 `sessions.detachEntered` 将其从内存移除（触发 `session/disposed` → DSH 推送 `host/session-removed` → 前端侧边栏立即移除），**再**删文件与清记录（避免 DSH 后续 flush 把日志写回磁盘）。
 
 ## 配置说明
 

@@ -315,6 +315,31 @@ async function deleteSession(ctx, sessionId) {
     return { ok: false, code: "not-archived", message: "会话不在归档集合中" };
   }
 
+  // 0) 处理 live session（DSH 内存中的 Session 对象）。
+  //    若会话仍在 ctx.sessions（agent 结束后会话保持 attached），仅删文件不会让
+  //    DSH 前端移除它：session.list 的 live 部分仍返回它，侧边栏显示"复活"。
+  //    - 正在运行（有活跃 agent）→ 拒绝删除；
+  //    - 空闲 live → 先 detachEntered 从内存移除，触发 session/disposed →
+  //      api-proxy 推送 host/session-removed → 前端侧边栏立即移除。
+  //    必须"先 detach、后删文件"：避免 DSH 后续 flush 该会话把日志写回磁盘。
+  const sessionsSvc = ctx.get("sessions");
+  if (sessionsSvc !== undefined) {
+    const live = sessionsSvc.get(sessionId);
+    if (live !== undefined) {
+      const agents = ctx.get("agents");
+      const active = agents !== undefined ? agents.get(sessionId) : undefined;
+      if (active !== undefined) {
+        return { ok: false, code: "session-running", message: "该会话正在运行，请先停止或等待结束后再删除" };
+      }
+      try {
+        const entry = sessionsSvc.liveEntryFor(live);
+        sessionsSvc.detachEntered(entry);
+      } catch (error) {
+        ctx.logger.warn(`dsh-archive-manager: detach live session ${sessionId} failed: ${String(error)}`);
+      }
+    }
+  }
+
   // 1) 定位会话日志目录。
   //    优先使用官方 sessionPersistence.locate(header)（backend 权威 artifact 路径）；
   //    不可用时回退到 header.cwd / workspace 记账 path 自行编码目录名。
