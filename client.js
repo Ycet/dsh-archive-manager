@@ -98,14 +98,20 @@ window.__ModuleLoader__.load({
     };
 
     // ---- i18n helper ----
-    const messages = {
-      zh,
-      en
-    };
-    let currentLocale = "zh";
-    let t = (key, params) => {
-      const dict = messages[currentLocale] || messages.zh;
-      let s = dict[key] !== undefined ? dict[key] : (messages.zh[key] !== undefined ? messages.zh[key] : key);
+    // The page and the sidebar label follow DSH's active locale through two
+    // official channels (no hand-rolled locale state):
+    //  1. `locale: NS` on the slot registration — the renderer derives a
+    //     namespace-bound `t` seat from (locale face, NS, revision) and injects
+    //     it as a prop; a locale switch bumps the revision, mints a NEW `t`
+    //     reference and re-renders every outlet (see dsh-client-web-react
+    //     localeSeat / useLocaleRevision).
+    //  2. `ctx.locale.bind(NS)` for the nav label thunk — resolveSlotLabel
+    //     re-evaluates label thunks at read time, and the settings shell
+    //     re-renders its section rows on every locale revision change.
+    // `zhT` below is only a last-resort fallback when the locale service is
+    // absent (should never happen: `locale: NS` requires the installed face).
+    const zhT = (key, params) => {
+      let s = zh[key] !== undefined ? zh[key] : key;
       if (params) {
         for (const [k, v] of Object.entries(params)) {
           s = s.split("{" + k + "}").join(String(v));
@@ -227,7 +233,7 @@ window.__ModuleLoader__.load({
     };
 
     // ---- ConfirmDialog ----
-    function ConfirmDialog({ title, body, onConfirm, onCancel, busy }) {
+    function ConfirmDialog({ title, body, onConfirm, onCancel, busy, t }) {
       return React.createElement(
         "div",
         { style: styles.overlay, onClick: busy ? undefined : onCancel },
@@ -248,6 +254,10 @@ window.__ModuleLoader__.load({
 
     // ---- ArchivePage ----
     function ArchivePage(props) {
+      // `t` is injected by the slot renderer from the entry's `locale: NS`
+      // declaration — it follows DSH's active locale and gets a fresh
+      // reference on every locale switch (which re-renders this component).
+      const t = props && typeof props.t === "function" ? props.t : zhT;
       const refreshSessions = props && typeof props.refreshSessions === "function" ? props.refreshSessions : null;
       const [state, setState] = React.useState({
         loading: true,
@@ -351,6 +361,7 @@ window.__ModuleLoader__.load({
                 ? t("confirmDeleteAll", { n: state.sessions.length })
                 : t("confirmDeleteSingle", { title: state.confirm.title || state.confirm.sessionId }),
             busy: state.busy,
+            t,
             onCancel: closeConfirm,
             onConfirm: () => {
               if (state.confirm.kind === "all") {
@@ -480,6 +491,10 @@ window.__ModuleLoader__.load({
 
     function apply(ctx) {
       const locale = ctx.get("locale");
+      // Namespace-bound translate following DSH's active locale at call time
+      // (the nav label thunk re-reads it whenever the settings shell
+      // re-renders, i.e. on every locale revision change).
+      const t = locale !== undefined ? locale.bind(NS) : zhT;
       if (locale !== undefined) {
         try {
           ctx.effect(() => locale.register(NS, { zh, en }), "dsh-archive-manager: dictionaries");
@@ -501,8 +516,10 @@ window.__ModuleLoader__.load({
           /* ignore */
         }
       };
-      const injected = () => ({ t, refreshSessions });
-      // locale API may provide bind; keep our own t as fallback
+      const injected = () => ({ refreshSessions });
+      // NOTE: `t` must NOT come from `inject` — the renderer's locale seat
+      // (derived from `locale: NS` + revision) would be shadowed by a plain
+      // prop and the page would stop following DSH's language switch.
       ctx.slots.inject("settings.section", () =>
         ctx.slots.register(
           {
