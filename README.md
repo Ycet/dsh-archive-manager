@@ -59,10 +59,10 @@ DeepSeek Harness（DSH）Web 界面插件：在设置窗口新增「归档」页
 
 ```sh
 # 方式一：从本地源码安装（开发）
-dsh plugin --profile <profile> add dsh-archive-manager@link:<absolute-path-to-plugin>
+dsh plugin --profile web add dsh-archive-manager@link:<absolute-path-to-plugin>
 
 # 方式二：从 GitHub 安装
-dsh plugin --profile <profile> add github:Ycet/dsh-archive-manager
+dsh plugin --profile web add github:Ycet/dsh-archive-manager
 ```
 
 包声明了 `dsh.bundle` 补丁层，`dsh plugin` 会自动把加载项合入 profile 的 bundle 层，无需手动编辑 `cordis.patch.yml`。
