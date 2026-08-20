@@ -59,10 +59,10 @@ A DeepSeek Harness (DSH) web-GUI plugin: adds an "Archive" page to the settings 
 
 ```sh
 # Option 1: install from a local source directory (development)
-dsh plugin --profile <profile> add dsh-archive-manager@link:<absolute-path-to-plugin>
+dsh plugin --profile web add dsh-archive-manager@link:<absolute-path-to-plugin>
 
 # Option 2: install from GitHub
-dsh plugin --profile <profile> add github:Ycet/dsh-archive-manager
+dsh plugin --profile web add github:Ycet/dsh-archive-manager
 ```
 
 The package declares a `dsh.bundle` patch layer; `dsh plugin` merges the loader entry into the profile's bundle layer automatically — no manual editing of `cordis.patch.yml` required.
