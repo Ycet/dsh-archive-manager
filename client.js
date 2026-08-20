@@ -15,6 +15,21 @@ window.__ModuleLoader__.load({
     Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
     const React = require("react");
 
+    // ---- 归档导航图标（来源：assets/icons/归档.svg，DSH IconArchiveOutline20） ----
+    // DSH 设置面板对每个分区条目默认渲染“设置”齿轮图标；为让本插件显示自己
+    // 的图标，本条目在注册选项里带一个 `icon`（React 元素）。此处内联的是
+    // DSH 官方图标库 @deepseek-ai/dsh-client-ui-primitives 的 IconArchiveOutline20
+    // 矢量路径（20×20 画布按 16×16 渲染），fill=currentColor 使其随导航文字
+    // 颜色适配浅色/深色主题，与 DSH 其它导航图标风格一致。
+    const ARCHIVE_ICON_D1 = "M15.8659 2.05975C17.2603 2.05995 18.3913 3.19096 18.3914 4.58527V5.4874C18.3914 6.02747 18.2192 6.52672 17.9303 6.93735C17.9336 6.96524 17.9388 6.99318 17.9388 7.02195V12.8884C17.9388 13.6345 17.9395 14.2379 17.8996 14.7254C17.8642 15.1593 17.7936 15.5499 17.6373 15.9141L17.5654 16.0685C17.278 16.6328 16.8405 17.1046 16.3038 17.434L16.0679 17.5661C15.66 17.7739 15.2196 17.8598 14.7237 17.9003C14.2362 17.9401 13.6327 17.9405 12.8867 17.9405H7.11122C6.36511 17.9405 5.76171 17.9401 5.27418 17.9003C4.84051 17.8649 4.44949 17.7952 4.08545 17.6391L3.93104 17.5661C3.36673 17.2785 2.89392 16.8414 2.56465 16.3044L2.43245 16.0685C2.22473 15.6608 2.13878 15.2211 2.09825 14.7254C2.05841 14.2379 2.05912 13.6345 2.05912 12.8884V7.02195C2.05912 6.99284 2.06422 6.96449 2.06758 6.93629C1.77931 6.52592 1.60858 6.02687 1.60858 5.4874V4.58527C1.60876 3.19084 2.73962 2.05975 4.1341 2.05975H15.8659ZM16.4984 7.92936C16.296 7.98169 16.0847 8.01288 15.8659 8.01291H4.1341C3.91478 8.01291 3.70246 7.98194 3.49955 7.92936V12.8884C3.49955 13.6582 3.50053 14.1927 3.53445 14.608C3.56769 15.0146 3.62923 15.244 3.71635 15.415L3.7925 15.5514C3.98339 15.8627 4.25749 16.1165 4.58464 16.2833L4.72529 16.3435C4.88095 16.3993 5.08638 16.4402 5.39158 16.4651C5.80685 16.4991 6.34138 16.5001 7.11122 16.5001H12.8867C13.6564 16.5001 14.1911 16.499 14.6063 16.4651C15.0128 16.432 15.2423 16.3703 15.4133 16.2833L15.5508 16.2061C15.8618 16.0152 16.116 15.7419 16.2827 15.415L16.3429 15.2732C16.3985 15.1177 16.4396 14.9128 16.4645 14.608C16.4985 14.1927 16.4984 13.6583 16.4984 12.8884V7.92936ZM4.1341 3.50019C3.53511 3.50019 3.0492 3.98631 3.04902 4.58527V5.4874C3.04902 6.08649 3.535 6.57248 4.1341 6.57248H15.8659C16.4648 6.57228 16.951 6.08638 16.951 5.4874V4.58527C16.9509 3.98644 16.4647 3.50038 15.8659 3.50019H4.1341Z";
+    const ARCHIVE_ICON_D2 = "M12.7962 12.5661V11.0832H7.20548V12.5661L12.7962 12.5661Z";
+    const ARCHIVE_ICON = React.createElement(
+      "svg",
+      { viewBox: "0 0 20 20", width: 16, height: 16, "aria-hidden": true, focusable: "false", "data-dsh-archive-injected": "1", style: { display: "block" } },
+      React.createElement("path", { fillRule: "evenodd", clipRule: "evenodd", fill: "currentColor", d: ARCHIVE_ICON_D1 }),
+      React.createElement("path", { fill: "currentColor", d: ARCHIVE_ICON_D2 })
+    );
+
     const NS = "settings.archiveManager";
 
     const inject = ["slots", "locale"];
@@ -527,12 +542,79 @@ window.__ModuleLoader__.load({
             id: "archives",
             order: 40,
             label: () => t("nav"),
+            icon: ARCHIVE_ICON,
             locale: NS,
             inject: injected
           },
           ArchivePage
         )
       );
+
+      // ---- 设置导航图标兜底注入（保证在任意 DSH 安装上都显示本插件图标） ----
+      // 上游 DSH 的 settings.section 目前不原生支持“每个分区自定义图标”：设置
+      // 壳层的 navIcon() 只对 models / agent-presets / plugins 三个固定 id 有
+      // 专属图标，其余分区一律渲染默认“设置”齿轮。为让本插件在任何 DSH 版本
+      // （包括没有打过对应补丁、尚未合并上游特性）的安装上“装完即显示”归档
+      // 图标，这里用一个健壮的运行时兜底：监听设置面板（[role=dialog] 内的
+      // nav）的 DOM 变化，找到文本与本插件当前导航标签（随 DSH 语言切换）一致
+      // 的导航行，把该行的图标占位替换为我们的归档 SVG。
+      // - 若所在 DSH 已原生支持分区 icon（壳层直接渲染了带 data-dsh-archive-injected
+      //   标记的图标），观察器识别后会跳过，不重复注入。
+      // - 壳层重渲染时 React 会重放齿轮，下一次 DOM 变更会再次注入，终态一致。
+      ctx.effect(() => {
+        if (typeof document === "undefined" || typeof MutationObserver === "undefined") {
+          return () => {};
+        }
+        const SVG_NS = "http://www.w3.org/2000/svg";
+        const ICON_MARK = "data-dsh-archive-injected";
+        const makeIcon = () => {
+          const svg = document.createElementNS(SVG_NS, "svg");
+          svg.setAttribute("viewBox", "0 0 20 20");
+          svg.setAttribute("width", "16");
+          svg.setAttribute("height", "16");
+          svg.setAttribute("aria-hidden", "true");
+          svg.setAttribute(ICON_MARK, "1");
+          svg.style.display = "block";
+          const addPath = (d, evenodd) => {
+            const p = document.createElementNS(SVG_NS, "path");
+            p.setAttribute("fill", "currentColor");
+            if (evenodd) {
+              p.setAttribute("fill-rule", "evenodd");
+              p.setAttribute("clip-rule", "evenodd");
+            }
+            p.setAttribute("d", d);
+            svg.appendChild(p);
+          };
+          addPath(ARCHIVE_ICON_D1, true);
+          addPath(ARCHIVE_ICON_D2, false);
+          return svg;
+        };
+        const alreadyOurs = (slot) => {
+          const svg = slot.querySelector("svg[" + ICON_MARK + "]");
+          if (!svg) return false;
+          const first = svg.querySelector("path");
+          return !!(first && first.getAttribute("d") === ARCHIVE_ICON_D1);
+        };
+        const inject = () => {
+          let label;
+          try { label = t("nav"); } catch { label = undefined; }
+          if (!label) return;
+          const rows = document.querySelectorAll('[role="dialog"] nav button');
+          for (let i = 0; i < rows.length; i++) {
+            const btn = rows[i];
+            if (btn.textContent.replace(/\s+/g, " ").trim() !== label) continue;
+            const slot = btn.children[0];
+            if (!slot || slot.tagName !== "SPAN") continue;
+            if (alreadyOurs(slot)) continue;
+            while (slot.firstChild) slot.removeChild(slot.firstChild);
+            slot.appendChild(makeIcon());
+          }
+        };
+        inject();
+        const mo = new MutationObserver(inject);
+        mo.observe(document.body, { childList: true, subtree: true, characterData: true });
+        return () => mo.disconnect();
+      }, "dsh-archive-manager: settings nav icon injection");
     }
 
     exports.NS = NS;
