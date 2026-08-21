@@ -557,9 +557,12 @@ window.__ModuleLoader__.load({
       // （包括没有打过对应补丁、尚未合并上游特性）的安装上“装完即显示”归档
       // 图标，这里用一个健壮的运行时兜底：监听设置面板（[role=dialog] 内的
       // nav）的 DOM 变化，找到文本与本插件当前导航标签（随 DSH 语言切换）一致
-      // 的导航行，把该行的图标占位替换为我们的归档 SVG。
+      // 的导航行，把该行的图标元素替换为我们的归档 SVG。
       // - 若所在 DSH 已原生支持分区 icon（壳层直接渲染了带 data-dsh-archive-injected
       //   标记的图标），观察器识别后会跳过，不重复注入。
+      // - 图标占位兼容两种壳层结构：旧壳层把图标包在 span 里（navIcon 占位
+      //   span），新壳层（0.1.1-rc.2+）把图标渲染为裸 <svg>。定位方式不依赖
+      //   具体标签：先按导航文本找到 label span，取它前一个兄弟作为图标槽。
       // - 壳层重渲染时 React 会重放齿轮，下一次 DOM 变更会再次注入，终态一致。
       ctx.effect(() => {
         if (typeof document === "undefined" || typeof MutationObserver === "undefined") {
@@ -589,8 +592,8 @@ window.__ModuleLoader__.load({
           addPath(ARCHIVE_ICON_D2, false);
           return svg;
         };
-        const alreadyOurs = (slot) => {
-          const svg = slot.querySelector("svg[" + ICON_MARK + "]");
+        const alreadyOurs = (btn) => {
+          const svg = btn.querySelector("svg[" + ICON_MARK + "]");
           if (!svg) return false;
           const first = svg.querySelector("path");
           return !!(first && first.getAttribute("d") === ARCHIVE_ICON_D1);
@@ -603,11 +606,22 @@ window.__ModuleLoader__.load({
           for (let i = 0; i < rows.length; i++) {
             const btn = rows[i];
             if (btn.textContent.replace(/\s+/g, " ").trim() !== label) continue;
-            const slot = btn.children[0];
-            if (!slot || slot.tagName !== "SPAN") continue;
-            if (alreadyOurs(slot)) continue;
-            while (slot.firstChild) slot.removeChild(slot.firstChild);
-            slot.appendChild(makeIcon());
+            if (alreadyOurs(btn)) continue;
+            // 图标槽 = 导航 label span 的前一个兄弟；找不到 label span 时，
+            // 若首个子元素不是 span（裸 svg 结构）也视作图标槽直接替换。
+            const children = Array.from(btn.children);
+            const labelIdx = children.findIndex(
+              (c) => c.tagName === "SPAN" && c.textContent.replace(/\s+/g, " ").trim() === label
+            );
+            const slot = labelIdx > 0 ? children[labelIdx - 1] : null;
+            if (!slot) continue;
+            const icon = makeIcon();
+            if (slot.tagName === "SVG") {
+              slot.replaceWith(icon);
+            } else {
+              while (slot.firstChild) slot.removeChild(slot.firstChild);
+              slot.appendChild(icon);
+            }
           }
         };
         inject();
