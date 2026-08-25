@@ -8,7 +8,7 @@
 A DeepSeek Harness (DSH) web-GUI plugin: adds an "Archive" page to the settings window for viewing, filtering, sorting, unarchiving and permanently deleting archived DSH sessions.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.1.1-blue.svg?style=for-the-badge)](package.json)
+[![Version](https://img.shields.io/badge/version-0.1.5-blue.svg?style=for-the-badge)](package.json)
 [![DSH](https://img.shields.io/badge/DSH-0.1.0--rc.6%2B-purple.svg?style=for-the-badge)](https://github.com/deepseek-ai/deepseek-harness)
 
 </div>
@@ -40,7 +40,7 @@ A DeepSeek Harness (DSH) web-GUI plugin: adds an "Archive" page to the settings 
 | Feature | Description |
 |---------|-------------|
 | **View archived sessions** | A new "Archive" page in the settings window lists all archived sessions, grouped by workspace; sessions not belonging to any workspace go under "(Unassigned)" |
-| **Filter** | Filter archived sessions by "All workspaces" or a specific workspace |
+| **Filter** | Filter archived sessions by "All workspaces", a specific workspace, or "Ungrouped"; the dropdown only lists workspaces that **own at least one archived session**, and the "Ungrouped" option only appears when ungrouped archived sessions exist |
 | **Sort** | Sort by session name (alphabetical asc/desc) or by session creation time (asc/desc) |
 | **Unarchive** | Removes a session from the archive set; it **reappears in the corresponding workspace group in the left sidebar** and can be opened |
 | **Delete (with confirmation)** | Delete a single session, or "Delete all" at once; every delete is guarded by a second confirmation dialog — it only runs after clicking "Confirm delete" |
@@ -83,7 +83,7 @@ The package declares a `dsh.bundle` patch layer; `dsh plugin` merges the loader 
 1. Click **Settings** at the bottom of the left sidebar;
 2. Select the **Archive** page on the left of the settings window;
 3. Toolbar at the top of the page:
-   - **Filter** dropdown: default "All workspaces"; pick a specific workspace to narrow down;
+   - **Filter** dropdown: default "All workspaces"; pick a specific workspace or "Ungrouped" to narrow down; the dropdown only lists workspaces that **own at least one archived session** (a workspace with no archived sessions does not appear), and the "Ungrouped" option only appears when ungrouped archived sessions exist;
    - **Sort** dropdown: by name or creation time, ascending or descending;
    - **Delete all** button: deletes every archived session under the current filter (with confirmation);
 4. Sessions are grouped by workspace, each group showing session titles and creation times:

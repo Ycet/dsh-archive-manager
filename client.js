@@ -32,6 +32,10 @@ window.__ModuleLoader__.load({
 
     const NS = "settings.archiveManager";
 
+    // 筛选菜单中「未分组」选项的 value（覆盖 workspaceId 为 null/undefined 的
+    // 归档会话；与下方分组渲染使用的组 key 保持一致）。
+    const UNGROUPED_FILTER = "__ungrouped__";
+
     const inject = ["slots", "locale"];
 
     const zh = {
@@ -43,6 +47,7 @@ window.__ModuleLoader__.load({
       loadRetry: "重试",
       groupAll: "全部工作区",
       groupUngrouped: "(未分组)",
+      filterUngrouped: "未分组",
       filterLabel: "筛选：",
       sortLabel: "排序：",
       sortNameAsc: "按名称 ↑",
@@ -83,6 +88,7 @@ window.__ModuleLoader__.load({
       loadRetry: "Retry",
       groupAll: "All workspaces",
       groupUngrouped: "(Ungrouped)",
+      filterUngrouped: "Ungrouped",
       filterLabel: "Filter:",
       sortLabel: "Sort:",
       sortNameAsc: "Name ↑",
@@ -286,14 +292,46 @@ window.__ModuleLoader__.load({
         notice: null
       });
 
-      const set = (patch) => setState((s) => ({ ...s, ...patch }));
+      const set = (patch) => setState((s) => (typeof patch === "function" ? patch(s) : { ...s, ...patch }));
+
+      // 把 /list 响应合并进 state。若当前筛选的工作区已没有任何归档会话
+      // （例如刚取消了该工作区最后一个归档会话，或已全部删除），自动把筛选
+      // 重置回「全部工作区」，避免 <select> 的 value 指向已不存在的选项。
+      const applyList = (res, extra) => {
+        setState((s) => {
+          const sessions = res && res.ok === true ? res.sessions || [] : s.sessions;
+          const workspaces = res && res.ok === true ? res.workspaces || [] : s.workspaces;
+          const liveWsIds = new Set();
+          let hasUngrouped = false;
+          for (const x of sessions) {
+            if (!x) continue;
+            if (x.workspaceId === null || x.workspaceId === undefined) hasUngrouped = true;
+            else liveWsIds.add(x.workspaceId);
+          }
+          let filter = s.filter;
+          if (filter === UNGROUPED_FILTER) {
+            // 「未分组」筛选仅在仍有未分组归档会话时有效
+            if (!hasUngrouped) filter = "";
+          } else if (filter !== "" && !liveWsIds.has(filter)) {
+            filter = "";
+          }
+          return {
+            ...s,
+            sessions,
+            workspaces,
+            filter,
+            error: null,
+            ...extra
+          };
+        });
+      };
 
       const load = () => {
         set({ loading: true, error: null });
         readList("/api/archive-manager/list")
           .then((res) => {
             if (res && res.ok === true) {
-              set({ loading: false, sessions: res.sessions || [], workspaces: res.workspaces || [] });
+              applyList(res, { loading: false });
             } else {
               set({ loading: false, error: (res && res.message) || t("loadError") });
             }
@@ -316,13 +354,7 @@ window.__ModuleLoader__.load({
               notice = (res && res.message) || t("loadError");
             }
             return readList("/api/archive-manager/list").then((listRes) => {
-              set({
-                busy: false,
-                sessions: listRes && listRes.ok ? listRes.sessions || [] : state.sessions,
-                workspaces: listRes && listRes.ok ? listRes.workspaces || state.workspaces : state.workspaces,
-                notice,
-                error: null
-              });
+              applyList(listRes, { busy: false, notice });
             });
           })
           .catch(() => set({ busy: false, error: t("loadError") }));
@@ -357,11 +389,24 @@ window.__ModuleLoader__.load({
       const closeConfirm = () => set({ confirm: null });
 
       // grouping
-      const filtered = state.filter
-        ? state.sessions.filter((s) => s.workspaceId === state.filter)
-        : state.sessions.slice();
+      const filtered = state.filter === UNGROUPED_FILTER
+        ? state.sessions.filter((s) => s.workspaceId === null || s.workspaceId === undefined)
+        : state.filter
+          ? state.sessions.filter((s) => s.workspaceId === state.filter)
+          : state.sessions.slice();
       const sorted = sortSessions(filtered, state.sort);
       const { byWs, ungrouped } = groupSessions(sorted, null);
+
+      // 筛选菜单只列出「至少有一个已归档会话」的工作区；没有任何归档会话的
+      // 工作区不出现，避免菜单展示全部 DSH 工作区（例如某工作区全部会话都
+      // 未归档时，其不在筛选菜单中）。
+      const filterableWorkspaces = state.workspaces.filter((w) =>
+        state.sessions.some((s) => s.workspaceId === w.id)
+      );
+      // 存在未分组（不属于任何工作区）的归档会话时，筛选菜单追加「未分组」选项。
+      const hasUngrouped = state.sessions.some(
+        (s) => s.workspaceId === null || s.workspaceId === undefined
+      );
 
       const wsTitle = (id) => {
         const found = state.workspaces.find((w) => w.id === id);
@@ -456,9 +501,12 @@ window.__ModuleLoader__.load({
               onChange: (e) => set({ filter: e.target.value })
             },
               React.createElement("option", { value: "" }, t("groupAll")),
-              state.workspaces.map((w) =>
+              filterableWorkspaces.map((w) =>
                 React.createElement("option", { key: w.id, value: w.id }, w.title || w.id)
-              )
+              ),
+              hasUngrouped
+                ? React.createElement("option", { key: UNGROUPED_FILTER, value: UNGROUPED_FILTER }, t("filterUngrouped"))
+                : null
             )
           ),
           React.createElement("div", { style: styles.controlGroup },

@@ -8,7 +8,7 @@
 DeepSeek Harness（DSH）Web 界面插件：在设置窗口新增「归档」页，查看、筛选、排序、取消归档与彻底删除已归档会话。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.1.1-blue.svg?style=for-the-badge)](package.json)
+[![Version](https://img.shields.io/badge/version-0.1.5-blue.svg?style=for-the-badge)](package.json)
 [![DSH](https://img.shields.io/badge/DSH-0.1.0--rc.6%2B-purple.svg?style=for-the-badge)](https://github.com/deepseek-ai/deepseek-harness)
 
 </div>
@@ -40,7 +40,7 @@ DeepSeek Harness（DSH）Web 界面插件：在设置窗口新增「归档」页
 | 功能 | 说明 |
 |------|------|
 | **查看已归档会话** | 设置窗口新增「归档」页，列出所有已归档会话，并按工作区（workspace）分组；不属于任何工作区的会话归入「(未分组)」 |
-| **筛选** | 按「全部工作区」或某个具体工作区过滤归档会话 |
+| **筛选** | 按「全部工作区」、某个具体工作区或「未分组」过滤归档会话；筛选菜单只列出**至少有一个已归档会话**的工作区，仅当存在未分组归档会话时才出现「未分组」选项 |
 | **排序** | 按会话名称（字母序升/降）、按会话创建时间（升/降）两种维度排序 |
 | **取消归档** | 会话从归档集合中移除，并**重新出现在左侧边栏对应工作区分组**中，可点击打开聊天窗口 |
 | **删除（二次确认）** | 可删除单个会话，或一次「删除全部」；所有删除操作都弹出二次确认弹窗，仅点击「确认删除」才真正执行 |
@@ -83,7 +83,7 @@ dsh plugin --profile web add github:Ycet/dsh-archive-manager
 1. 点击左侧边栏底部的 **设置**；
 2. 在设置窗口左侧选择 **归档** 页面；
 3. 页面上方工具条：
-   - **筛选**下拉：默认「全部工作区」，可选某个具体工作区；
+   - **筛选**下拉：默认「全部工作区」，可选某个具体工作区或「未分组」；菜单只列出**至少有一个已归档会话**的工作区（某工作区没有任何归档会话时不出现在菜单中），仅当存在未分组归档会话时才出现「未分组」选项；
    - **排序**下拉：按名称或创建时间升/降序；
    - **删除全部**按钮：删除当前筛选下全部已归档会话（需二次确认）；
 4. 会话按工作区分组展示，每组含会话标题与创建时间：
