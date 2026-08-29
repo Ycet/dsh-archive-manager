@@ -8,7 +8,7 @@
 A DeepSeek Harness (DSH) web-GUI plugin: adds an "Archive" page to the settings window for viewing, filtering, sorting, unarchiving and permanently deleting archived DSH sessions.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.1.6-blue.svg?style=for-the-badge)](package.json)
+[![Version](https://img.shields.io/badge/version-0.1.7-blue.svg?style=for-the-badge)](package.json)
 [![DSH](https://img.shields.io/badge/DSH-0.1.0--rc.6%2B-purple.svg?style=for-the-badge)](https://github.com/deepseek-ai/deepseek-harness)
 
 </div>
@@ -31,7 +31,9 @@ A DeepSeek Harness (DSH) web-GUI plugin: adds an "Archive" page to the settings 
 
 ## 📸 Preview
 
-<!-- Screenshot to be added: the "Archive" page in the settings window (workspace-grouped list + filter/sort toolbar) -->
+![Archive page preview](assets/screenshot/archive-page.png)
+
+*Workspace-grouped list + filter/sort toolbar*
 
 ---
 

@@ -1,6 +1,6 @@
 {
   "name": "dsh-archive-manager",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "DeepSeek Harness web-GUI plugin: a Settings「归档」page to view archived sessions grouped by workspace, filter (all/one workspace) and sort (name / created time), unarchive a session so it reappears in the sidebar and can be reopened, and permanently delete one or all archived sessions (each delete guarded by a second confirmation dialog).",
   "type": "module",
   "main": "index.js",

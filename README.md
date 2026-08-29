@@ -8,7 +8,7 @@
 DeepSeek Harness（DSH）Web 界面插件：在设置窗口新增「归档」页，查看、筛选、排序、取消归档与彻底删除已归档会话。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.1.6-blue.svg?style=for-the-badge)](package.json)
+[![Version](https://img.shields.io/badge/version-0.1.7-blue.svg?style=for-the-badge)](package.json)
 [![DSH](https://img.shields.io/badge/DSH-0.1.0--rc.6%2B-purple.svg?style=for-the-badge)](https://github.com/deepseek-ai/deepseek-harness)
 
 </div>
@@ -31,7 +31,9 @@ DeepSeek Harness（DSH）Web 界面插件：在设置窗口新增「归档」页
 
 ## 📸 界面预览
 
-<!-- 截图待补充：设置窗口「归档」页（工作区分组列表 + 筛选/排序工具条） -->
+![「设置：归档」页界面预览](assets/screenshot/archive-page.png)
+
+*工作区分组列表 + 筛选/排序工具条*
 
 ---
 
