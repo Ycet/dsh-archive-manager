@@ -194,42 +194,42 @@ window.__ModuleLoader__.load({
 
     // ---- styles ----
     const styles = {
-      wrap: { maxWidth: 720, margin: "0 auto", padding: "16px 20px 40px", fontFamily: "var(--dsw-font-sans, inherit)" },
-      title: { margin: "0 0 4px", fontSize: 20, fontWeight: 600, color: "var(--dsw-alias-text-primary)" },
+      wrap: { maxWidth: 720, margin: "0 auto", padding: "16px 20px 40px", fontFamily: "var(--dsw-font-family, inherit)" },
+      title: { margin: "0 0 4px", fontSize: 20, fontWeight: 600, color: "var(--dsw-alias-label-primary, #0f1115)" },
       subtitle: { margin: "0 0 16px", fontSize: 13, color: "var(--dsw-alias-label-tertiary)", lineHeight: 1.5 },
       toolbar: { display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 8 },
       controlGroup: { display: "flex", alignItems: "center", gap: 6 },
       controlLabel: { fontSize: 13, color: "var(--dsw-alias-label-tertiary)" },
       select: {
         fontSize: 13, padding: "4px 8px", borderRadius: 6,
-        border: "1px solid var(--dsw-alias-border, #e2e4ea)",
-        background: "var(--dsw-surface-canvas, #fff)", color: "var(--dsw-alias-text-primary)"
+        border: "1px solid var(--dsw-alias-border-l2, #0000001a)",
+        background: "var(--dsw-alias-bg-layer-2, #fff)", color: "var(--dsw-alias-label-primary, #0f1115)"
       },
       buttonsRow: { display: "flex", alignItems: "center", gap: 10, marginLeft: "auto" },
       count: { fontSize: 12, color: "var(--dsw-alias-label-tertiary)" },
       dangerButton: {
         fontSize: 13, padding: "5px 12px", borderRadius: 6, cursor: "pointer",
-        border: "1px solid var(--dsw-alias-danger, #d93025)", color: "var(--dsw-alias-danger, #d93025)",
+        border: "1px solid var(--dsw-alias-state-error-primary, #d93025)", color: "var(--dsw-alias-state-error-primary, #d93025)",
         background: "transparent"
       },
       group: { marginBottom: 20 },
       groupHeader: {
         display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: 6,
-        background: "var(--dsw-surface-subtle, #f3f4f6)", color: "var(--dsw-alias-text-secondary)", marginBottom: 4
+        background: "var(--dsw-alias-bg-module-platform, #f5f6f7)", color: "var(--dsw-alias-label-secondary, #61666b)", marginBottom: 4
       },
       groupTitle: { fontWeight: 600, fontSize: 13 },
       groupCount: { fontSize: 12, color: "var(--dsw-alias-label-tertiary)" },
       row: {
         display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 6,
-        borderBottom: "1px solid var(--dsw-alias-hairline, #eceef1)"
+        borderBottom: "1px solid var(--dsw-alias-border-l1, #0000000a)"
       },
-      rowTitle: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 14, color: "var(--dsw-alias-text-primary)" },
+      rowTitle: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 14, color: "var(--dsw-alias-label-primary, #0f1115)" },
       rowMeta: { flex: 1, fontSize: 12, color: "var(--dsw-alias-label-tertiary)", whiteSpace: "nowrap" },
       rowActions: { display: "flex", gap: 6, flexShrink: 0 },
       defaultButton: {
         fontSize: 12, padding: "4px 10px", borderRadius: 6, cursor: "pointer",
-        border: "1px solid var(--dsw-alias-border, #e2e4ea)",
-        background: "var(--dsw-surface-canvas, #fff)", color: "var(--dsw-alias-text-secondary)"
+        border: "1px solid var(--dsw-alias-border-l2, #0000001a)",
+        background: "var(--dsw-alias-button-elevated-fill, #fff)", color: "var(--dsw-alias-label-secondary, #61666b)"
       },
       defaultButtonDisabled: { opacity: 0.6, cursor: "default" },
       hint: { padding: "24px 0", textAlign: "center", color: "var(--dsw-alias-label-tertiary)", fontSize: 13 },
@@ -240,16 +240,16 @@ window.__ModuleLoader__.load({
       },
       dialog: {
         width: 420, maxWidth: "90vw", borderRadius: 10, padding: "20px",
-        background: "var(--dsw-surface-panel, #fff)", boxShadow: "0 8px 30px rgba(0,0,0,0.18)",
-        color: "var(--dsw-alias-text-primary)"
+        background: "var(--dsw-alias-bg-layer-3, #fff)", boxShadow: "0 8px 30px rgba(0,0,0,0.18)",
+        color: "var(--dsw-alias-label-primary, #0f1115)"
       },
       dialogTitle: { margin: "0 0 10px", fontSize: 16, fontWeight: 600 },
-      dialogBody: { fontSize: 14, lineHeight: 1.6, color: "var(--dsw-alias-text-secondary)", marginBottom: 16, wordBreak: "break-word" },
+      dialogBody: { fontSize: 14, lineHeight: 1.6, color: "var(--dsw-alias-label-secondary, #61666b)", marginBottom: 16, wordBreak: "break-word" },
       dialogActions: { display: "flex", justifyContent: "flex-end", gap: 8 },
       primaryDangerButton: {
         fontSize: 13, padding: "6px 14px", borderRadius: 6, cursor: "pointer",
-        border: "1px solid var(--dsw-alias-danger, #d93025)",
-        background: "var(--dsw-alias-danger, #d93025)", color: "#fff"
+        border: "1px solid var(--dsw-alias-state-error-primary, #d93025)",
+        background: "var(--dsw-alias-state-error-primary, #d93025)", color: "var(--dsw-alias-label-primary-foreground, #fff)"
       }
     };
 
