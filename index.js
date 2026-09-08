@@ -16,8 +16,8 @@
  *       host/archived-sessions-changed，浏览器侧边栏即时刷新。
  *
  *   POST /api/archive-manager/delete      { sessionId }
- *       彻底删除：先从 archivedSessionIds 与其所属 workspace 的 sessionIds
- *       中移除（先保证 DSH 状态一致，再尽力删除会话日志目录）。
+ *       彻底删除：先确认 live session 与 agent 状态，再删除会话日志目录，
+ *       最后从 archivedSessionIds 与所属 workspace 的 sessionIds 中移除。
  *
  *   POST /api/archive-manager/delete-all
  *       对当前全部归档会话逐个执行删除。
@@ -129,6 +129,77 @@ function workspaceDomain(ctx) {
   return storageDomain.get("workspace");
 }
 
+function unavailable(code, message) {
+  return { ok: false, status: 503, code, message };
+}
+
+function responseStatus(result) {
+  return result && result.status === 503 ? 503 : 200;
+}
+
+function sameIds(left, right) {
+  return Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((id, index) => id === right[index]);
+}
+
+/**
+ * rc.1 的 workspaceRegistry 仍以 state 作为侧边栏归档快照。所有直接状态
+ * 兼容访问集中在这里；结构缺失或持久化/内存已失步时，写操作必须停止。
+ */
+function workspaceStateAdapter(ctx, dom) {
+  const registry = ctx.get("workspaceRegistry");
+  if (registry === undefined) return unavailable("workspace-registry-unavailable", "workspaceRegistry 服务不可用");
+  const state = registry.state;
+  if (!state || typeof state !== "object" || !Array.isArray(state.archivedSessionIds)) {
+    return unavailable("workspace-registry-incompatible", "workspaceRegistry 状态结构与当前插件不兼容");
+  }
+  let durable;
+  try {
+    durable = dom.global.get();
+  } catch (error) {
+    return { ok: false, code: "read-failed", message: `读取 workspace 领域失败: ${String(error)}` };
+  }
+  if (!durable || typeof durable !== "object" || !Array.isArray(durable.archivedSessionIds)) {
+    return unavailable("workspace-domain-incompatible", "workspace 领域缺少 archivedSessionIds");
+  }
+  if (!sameIds(durable.archivedSessionIds, state.archivedSessionIds)) {
+    return unavailable("workspace-state-out-of-sync", "workspace 持久化状态与 registry 快照不一致，已拒绝写入");
+  }
+  return { ok: true, registry, state, durable, setState: typeof registry.setState === "function" ? registry.setState.bind(registry) : null };
+}
+
+function workspaceMembership(ctx, dom, sessionId) {
+  const state = workspaceStateAdapter(ctx, dom);
+  if (!state.ok) return state;
+  if (typeof state.registry.get !== "function") {
+    return unavailable("workspace-registry-incompatible", "workspaceRegistry 缺少 get 能力");
+  }
+  let table;
+  try {
+    table = dom.table("workspaces");
+  } catch (error) {
+    return unavailable("workspace-table-unavailable", `workspace 表不可用: ${String(error)}`);
+  }
+  if (!table || typeof table.entries !== "function") {
+    return unavailable("workspace-table-unavailable", "workspace 表缺少 entries 能力");
+  }
+  const owners = [];
+  for (const [workspaceId, record] of table.entries()) {
+    if (Array.isArray(record.sessionIds) && record.sessionIds.includes(sessionId)) owners.push(workspaceId);
+  }
+  if (owners.length > 1) {
+    return unavailable("workspace-membership-invalid", "同一会话同时归属于多个 workspace，已拒绝修改");
+  }
+  const entities = [];
+  for (const workspaceId of owners) {
+    const entity = state.registry.get(workspaceId);
+    if (!entity || typeof entity.detachSession !== "function") {
+      return unavailable("workspace-registry-incompatible", `workspace ${workspaceId} 缺少 detachSession 能力`);
+    }
+    entities.push({ workspaceId, entity });
+  }
+  return { ok: true, ...state, entities };
+}
+
 /**
  * 读取"归档会话 + 工作区"报告。
  * 返回 { ok:true, archivedSessionIds, workspaces, sessions }。
@@ -137,7 +208,7 @@ function workspaceDomain(ctx) {
 async function readArchivedReport(ctx) {
   const dom = workspaceDomain(ctx);
   if (dom === undefined) {
-    return { ok: false, code: "domain-unavailable", message: "workspace domain 未挂载（DSH storageDomain 不可用）" };
+    return unavailable("domain-unavailable", "workspace domain 未挂载（DSH storageDomain 不可用）");
   }
   let global;
   try {
@@ -247,72 +318,92 @@ async function readArchivedReport(ctx) {
 /** 从 archivedSessionIds 与所属 workspace 的 sessionIds 中移除；作用于持久化领域。 */
 async function writeRemove(ctx, sessionId) {
   const dom = workspaceDomain(ctx);
-  if (dom === undefined) return { ok: false, code: "domain-unavailable", message: "workspace domain 未挂载" };
+  if (dom === undefined) return unavailable("domain-unavailable", "workspace domain 未挂载");
   const global = dom.global.get();
   if (!Array.isArray(global.archivedSessionIds) || !global.archivedSessionIds.includes(sessionId)) {
     return { ok: false, code: "not-archived", message: "会话不在归档集合中" };
   }
   const nextArchived = global.archivedSessionIds.filter((id) => id !== sessionId);
 
-  const registry = ctx.get("workspaceRegistry");
-  const touched = [];
-
-  // 从所有 workspace 的 sessionIds 中移除该 id。
-  // 优先走官方 WorkspaceEntity.detachSession（会更新 entity.record 缓存、
-  // stamping updatedAt、修剪无效记账并发出 domain/changed），
-  // 避免裸 table.update 导致 registry 内存缓存与存储失步。
-  let table;
+  const membership = workspaceMembership(ctx, dom, sessionId);
+  if (!membership.ok) return membership;
   try {
-    table = dom.table("workspaces");
-  } catch {
-    table = undefined;
+    for (const { entity } of membership.entities) await entity.detachSession(sessionId);
+  } catch (error) {
+    return { ok: false, code: "write-failed", message: `从 workspace 记账移除失败: ${String(error)}` };
   }
-  if (table !== undefined) {
-    try {
-      for (const [wid, rec] of table.entries()) {
-        const ids = Array.isArray(rec.sessionIds) ? rec.sessionIds : [];
-        if (!ids.includes(sessionId)) continue;
-        const entity = registry !== undefined ? registry.get(wid) : undefined;
-        if (entity !== undefined && typeof entity.detachSession === "function") {
-          await entity.detachSession(sessionId);
-        } else {
-          const next = ids.filter((id) => id !== sessionId);
-          await table.update(wid, (r) => ({ ...r, sessionIds: next }));
-        }
-        touched.push(wid);
-      }
-    } catch (error) {
-      return { ok: false, code: "write-failed", message: `从 workspace 记账移除失败: ${String(error)}` };
-    }
+  const remaining = workspaceMembership(ctx, dom, sessionId);
+  if (!remaining.ok) return remaining;
+  if (remaining.entities.length > 0) {
+    return { ok: false, code: "workspace-membership-not-removed", message: "detachSession 完成后 workspace 仍保留该会话，归档状态未修改" };
   }
 
-  await syncArchivedState(ctx, dom, nextArchived);
-  return { ok: true, touchedWorkspaces: touched };
+  const synced = await syncArchivedState(ctx, dom, nextArchived);
+  if (!synced.ok) return synced;
+  return { ok: true, touchedWorkspaces: membership.entities.map(({ workspaceId }) => workspaceId) };
 }
 
 /**
  * 持久化新的 archivedSessionIds，并将 workspaceRegistry 的内存 state 同步到
- * 同一值。DSH 的 WorkspaceRegistry 是单一写入者（其 `archivedSessionIds`
- * getter 直接读内存 `this.state`），若只写存储不写内存，后续侧边栏再归档/
- * 排序等写入会基于旧缓存覆盖本次变更（实测：取消归档后再归档不显示、
- * 硬刷新后会话消失）。因此这里两者必须一起更新。
+ * 同一值。rc.1 暴露可调用的 setState 时优先使用其单一写路径；旧实现才回退
+ * 到 domain.set + state 替换。写入前后都验证持久化与内存快照一致。
  */
 async function syncArchivedState(ctx, dom, nextArchived) {
-  const global = dom.global.get();
-  await dom.global.set({ ...global, archivedSessionIds: nextArchived });
-  const registry = ctx.get("workspaceRegistry");
-  if (registry !== undefined && registry.state !== undefined && registry.state !== null) {
-    registry.state = { ...registry.state, archivedSessionIds: nextArchived.slice() };
+  const adapter = workspaceStateAdapter(ctx, dom);
+  if (!adapter.ok) return adapter;
+  const nextState = { ...adapter.state, archivedSessionIds: nextArchived.slice() };
+  const nextDurable = { ...adapter.durable, archivedSessionIds: nextArchived.slice() };
+  try {
+    if (adapter.setState !== null) await adapter.setState(nextState);
+    else {
+      await dom.global.set(nextDurable);
+      adapter.registry.state = nextState;
+    }
+  } catch (error) {
+    return { ok: false, code: "write-failed", message: `写入 workspace 归档状态失败: ${String(error)}` };
   }
+
+  let durableAfter;
+  try {
+    durableAfter = dom.global.get();
+  } catch (error) {
+    return { ok: false, code: "write-failed", message: `复核 workspace 归档状态失败: ${String(error)}` };
+  }
+  const memoryAfter = adapter.registry.state;
+  if (!sameIds(durableAfter?.archivedSessionIds, nextArchived) || !sameIds(memoryAfter?.archivedSessionIds, nextArchived)) {
+    try {
+      if (adapter.setState !== null) await adapter.setState(adapter.state);
+      else {
+        await dom.global.set(adapter.durable);
+        adapter.registry.state = adapter.state;
+      }
+    } catch (rollbackError) {
+      return { ok: false, code: "workspace-state-out-of-sync", message: `workspace 状态复核失败且回滚失败: ${String(rollbackError)}` };
+    }
+    return { ok: false, code: "workspace-state-out-of-sync", message: "workspace 状态复核失败，已回滚" };
+  }
+  return { ok: true };
 }
 
 /** 彻底删除一个归档会话：先删除日志文件（并确认成功），再移除归档与记账。 */
-async function deleteSession(ctx, sessionId) {
+async function deleteSession(ctx, sessionId, fileOps = { rm, stat }) {
   const dom = workspaceDomain(ctx);
-  if (dom === undefined) return { ok: false, code: "domain-unavailable", message: "workspace domain 未挂载" };
+  if (dom === undefined) return unavailable("domain-unavailable", "workspace domain 未挂载");
   const global = dom.global.get();
   if (!Array.isArray(global.archivedSessionIds) || !global.archivedSessionIds.includes(sessionId)) {
     return { ok: false, code: "not-archived", message: "会话不在归档集合中" };
+  }
+
+  // 删除不可逆：先验证后续每项能力，不能在删完文件后才发现 registry 无法同步。
+  const membership = workspaceMembership(ctx, dom, sessionId);
+  if (!membership.ok) return membership;
+  const persistence = ctx.get("sessionPersistence");
+  if (!persistence || typeof persistence.list !== "function") {
+    return unavailable("session-persistence-unavailable", "sessionPersistence 服务不可用");
+  }
+  const sessionsSvc = ctx.get("sessions");
+  if (!sessionsSvc || typeof sessionsSvc.get !== "function") {
+    return unavailable("sessions-unavailable", "sessions 服务不可用，无法确认会话是否仍在运行");
   }
 
   // 0) 处理 live session（DSH 内存中的 Session 对象）。
@@ -324,31 +415,36 @@ async function deleteSession(ctx, sessionId) {
   //      侧边栏立即移除；DSH 的 agent-loop 也会在 session/disposed 时自动
   //      清理关联的 idle agent（checkReleased）。
   //    必须"先 detach、后删文件"：避免 DSH 后续 flush 该会话把日志写回磁盘。
-  const sessionsSvc = ctx.get("sessions");
-  if (sessionsSvc !== undefined) {
-    const live = sessionsSvc.get(sessionId);
-    if (live !== undefined) {
-      // 只拒绝真正 running 的 agent；idle agent（agent 存在但 status 非
-      // "running"）视为空闲，允许删除。
-      let running = false;
-      const agents = ctx.get("agents");
-      if (agents !== undefined) {
-        try {
-          const agent = agents.get(sessionId);
-          if (agent !== undefined) running = agent.status === "running";
-        } catch {
-          /* 无法读取状态时不阻止删除 */
-        }
-      }
-      if (running) {
-        return { ok: false, code: "session-running", message: "该会话正在运行，请先停止或等待结束后再删除" };
-      }
-      try {
-        const entry = sessionsSvc.liveEntryFor(live);
-        sessionsSvc.detachEntered(entry);
-      } catch (error) {
-        ctx.logger.warn(`dsh-archive-manager: detach live session ${sessionId} failed: ${String(error)}`);
-      }
+  let live;
+  try {
+    live = sessionsSvc.get(sessionId);
+  } catch (error) {
+    return unavailable("sessions-unavailable", `读取 live session 失败: ${String(error)}`);
+  }
+  if (live !== undefined) {
+    if (typeof sessionsSvc.liveEntryFor !== "function" || typeof sessionsSvc.detachEntered !== "function") {
+      return unavailable("sessions-incompatible", "sessions 服务缺少安全移除 live session 的能力");
+    }
+    // 只拒绝真正 running 的 agent；idle agent（agent 存在但 status 非
+    // "running"）视为空闲，允许删除。
+    const agents = ctx.get("agents");
+    if (!agents || typeof agents.get !== "function") {
+      return unavailable("agents-unavailable", "agents 服务不可用，无法确认 live session 是否仍在运行");
+    }
+    let agent;
+    try {
+      agent = agents.get(sessionId);
+    } catch (error) {
+      return unavailable("agents-unavailable", `读取 agent 状态失败: ${String(error)}`);
+    }
+    if (agent !== undefined && agent.status === "running") {
+      return { ok: false, code: "session-running", message: "该会话正在运行，请先停止或等待结束后再删除" };
+    }
+    try {
+      const entry = sessionsSvc.liveEntryFor(live);
+      sessionsSvc.detachEntered(entry);
+    } catch (error) {
+      return { ok: false, code: "session-detach-failed", message: `从内存移除 live session 失败: ${String(error)}` };
     }
   }
 
@@ -357,24 +453,21 @@ async function deleteSession(ctx, sessionId) {
   //    不可用时回退到 header.cwd / workspace 记账 path 自行编码目录名。
   let targetDir = null;
   let located = false;
-  const persistence = ctx.get("sessionPersistence");
   try {
-    if (persistence !== undefined) {
-      // 先取 header（list 是轻量元数据列出，不解析完整日志）
-      let header;
-      try {
-        const headers = await persistence.list();
-        header = headers.find((h) => h.id === sessionId);
-      } catch {
-        /* ignore */
-      }
-      if (header !== undefined && typeof persistence.locate === "function") {
-        const loc = persistence.locate(header);
-        if (loc && typeof loc.path === "string" && loc.path.length > 0) {
-          const { dirname } = await import("node:path");
-          targetDir = dirname(loc.path);
-          located = true;
-        }
+    // 先取 header（list 是轻量元数据列出，不解析完整日志）
+    let header;
+    try {
+      const headers = await persistence.list();
+      header = headers.find((h) => h.id === sessionId);
+    } catch {
+      /* ignore */
+    }
+    if (header !== undefined && typeof persistence.locate === "function") {
+      const loc = persistence.locate(header);
+      if (loc && typeof loc.path === "string" && loc.path.length > 0) {
+        const { dirname } = await import("node:path");
+        targetDir = dirname(loc.path);
+        located = true;
       }
     }
   } catch {
@@ -385,7 +478,7 @@ async function deleteSession(ctx, sessionId) {
     // 回退：用 header.cwd 或 workspace 记账 path 编码
     let cwd;
     try {
-      if (persistence !== undefined) {
+      if (typeof persistence.load === "function") {
         try {
           const inspected = await persistence.load(sessionId);
           if (inspected && inspected.header && typeof inspected.header.cwd === "string") cwd = inspected.header.cwd;
@@ -416,8 +509,8 @@ async function deleteSession(ctx, sessionId) {
   //    删除失败时返回错误且不改动归档状态 —— 会话保持隐藏，不会"复活"到侧边栏。
   if (targetDir !== null) {
     try {
-      await rm(targetDir, { recursive: true, force: true });
-      const exists = await stat(targetDir).then(() => true).catch(() => false);
+      await fileOps.rm(targetDir, { recursive: true, force: true });
+      const exists = await fileOps.stat(targetDir).then(() => true).catch(() => false);
       if (exists) {
         return { ok: false, code: "delete-file-failed", message: "日志目录删除后仍存在" };
       }
@@ -429,10 +522,8 @@ async function deleteSession(ctx, sessionId) {
     // 保持归档标记不变，返回失败，避免"半删"造成会话复活。
     let stillListed = false;
     try {
-      if (persistence !== undefined) {
-        const headers = await persistence.list();
-        stillListed = headers.some((h) => h.id === sessionId);
-      }
+      const headers = await persistence.list();
+      stillListed = headers.some((h) => h.id === sessionId);
     } catch {
       /* ignore */
     }
@@ -456,7 +547,7 @@ async function deleteSession(ctx, sessionId) {
 async function handleList(ctx, res) {
   const report = await readArchivedReport(ctx);
   if (!report.ok) {
-    sendJson(res, 200, { ok: false, code: report.code, message: report.message });
+    sendJson(res, responseStatus(report), { ok: false, code: report.code, message: report.message });
     return;
   }
   sendJson(res, 200, {
@@ -482,7 +573,7 @@ async function handleUnarchive(ctx, req, res) {
   }
   const dom = workspaceDomain(ctx);
   if (dom === undefined) {
-    sendJson(res, 200, { ok: false, code: "domain-unavailable", message: "workspace domain 未挂载" });
+    sendJson(res, 503, { ok: false, code: "domain-unavailable", message: "workspace domain 未挂载" });
     return;
   }
   const global = dom.global.get();
@@ -491,11 +582,15 @@ async function handleUnarchive(ctx, req, res) {
     return;
   }
   try {
-    await syncArchivedState(
+    const result = await syncArchivedState(
       ctx,
       dom,
       global.archivedSessionIds.filter((id) => id !== sessionId)
     );
+    if (!result.ok) {
+      sendJson(res, responseStatus(result), { ok: false, code: result.code, message: result.message });
+      return;
+    }
     sendJson(res, 200, { ok: true, sessionId });
   } catch (error) {
     sendJson(res, 200, { ok: false, code: "write-failed", message: `取消归档失败: ${String(error)}` });
@@ -517,7 +612,7 @@ async function handleDelete(ctx, req, res) {
   }
   try {
     const result = await deleteSession(ctx, sessionId);
-    sendJson(res, 200, result);
+    sendJson(res, responseStatus(result), result);
   } catch (error) {
     ctx.logger.warn("dsh-archive-manager: delete session failed");
     ctx.logger.warn(error);
@@ -528,7 +623,7 @@ async function handleDelete(ctx, req, res) {
 async function handleDeleteAll(ctx, res) {
   const report = await readArchivedReport(ctx);
   if (!report.ok) {
-    sendJson(res, 200, { ok: false, code: report.code, message: report.message });
+    sendJson(res, responseStatus(report), { ok: false, code: report.code, message: report.message });
     return;
   }
   const ids = report.archivedSessionIds.slice();
@@ -542,6 +637,11 @@ async function handleDeleteAll(ctx, res) {
     } catch (error) {
       failures.push({ sessionId: sid, code: "internal", message: String(error) });
     }
+  }
+  const unavailableFailure = okCount === 0 && failures.length > 0 && failures.every((failure) => failure.code.endsWith("-unavailable") || failure.code.endsWith("-incompatible") || failure.code === "workspace-state-out-of-sync");
+  if (unavailableFailure) {
+    sendJson(res, 503, { ok: false, code: failures[0].code, message: failures[0].message, deleted: 0, total: ids.length, failures });
+    return;
   }
   sendJson(res, 200, { ok: true, deleted: okCount, total: ids.length, failures });
 }
@@ -622,4 +722,4 @@ function apply(ctx) {
   );
 }
 
-export { name, inject, apply };
+export { name, inject, apply, deleteSession, readArchivedReport, sessionDirFor };
