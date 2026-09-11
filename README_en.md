@@ -8,7 +8,7 @@
 A DeepSeek Harness (DSH) web-GUI plugin: adds an "Archive" page to the settings window for viewing, filtering, sorting, unarchiving and permanently deleting archived DSH sessions.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.1.7-blue.svg?style=for-the-badge)](package.json)
+[![Version](https://img.shields.io/badge/version-0.1.9-blue.svg?style=for-the-badge)](package.json)
 [![DSH](https://img.shields.io/badge/DSH-0.1.0--rc.6%2B-purple.svg?style=for-the-badge)](https://github.com/deepseek-ai/deepseek-harness)
 
 </div>
@@ -144,7 +144,8 @@ flowchart LR
     H1 --> SP["sessionPersistence / sessionQuery"]
     H2 --> WS
     H3 --> WS
-    H3 --> FS["fs.rm delete session log dir"]
+    H3 --> FL["await sessionPersistence.flush durability barrier"]
+    FL --> FS["fs.rm delete session log dir"]
     H4 --> H3
 ```
 
@@ -156,11 +157,14 @@ After the host writes the `workspace` domain global, DSH validates the domain st
 
 - **No official unarchive / delete-session API**: the DSH host `workspaceRegistry` only exposes `archiveSession` — there is no `unarchiveSession` and no "delete session" API. This plugin reads/writes the `storageDomain.get('workspace')` domain store (`~/.dsh/storages/workspace.json`) directly, strictly preserving its schema.
 - **Deletion is permanent**: deleting a session removes the log files under `~/.dsh/sessions/<project-dir>/<sessionId>/` — irreversible. DSH's SQLite search index cleans up the session on the next reconciliation.
-- **Files are deleted before records are cleared**: deletion first locates the session log directory via the official `sessionPersistence.locate(header)` (falling back to `header.cwd` / workspace bookkeeping paths), and only after the log file deletion **succeeds** does it remove the archive marker and workspace bookkeeping; if log deletion fails (cannot locate, still exists, IO error), it returns an error and **leaves the archive state untouched** — the session stays hidden and does not "resurrect" in the sidebar.
+- **Files are deleted before records are cleared**: deletion first locates the session log directory and only after the log file deletion **succeeds** does it remove the archive marker and workspace bookkeeping; if log deletion fails (cannot locate, still exists, IO error), it returns an error and **leaves the archive state untouched** — the session stays hidden and does not "resurrect" in the sidebar.
+- **Persistence snapshot compatibility and deletion verification**: DSH 0.1.5-rc.1 returns `{ header, revision }` from `sessionPersistence.list()`, not bare headers. Reading `id` / `cwd` directly missed the real session; when fallback paths also failed, deletion incorrectly cleared the archive marker while leaving the log on disk. Snapshots are now unpacked (with legacy bare-header support), and the actual header is passed to `locate()`, supporting custom storage roots and legitimate `_no-cwd` paths. Available `stat(id)` is used to verify deletion. Read errors, incompatible records, remaining sessions, and unresolvable listed sessions preserve archive markers and report failure.
+- **Live persistence drain safeguard**: the plugin retains `await sessionPersistence.flush()` after detaching an idle live session, and refuses to clear archive markers when that capability is missing or fails. This drains currently active write handles. The previous asynchronous-rewrite root-cause claim was not reproduced against the real backend; the defect reproduced and fixed in this investigation is incorrect snapshot parsing.
 - **Takes effect live**: writing the global triggers `domain/changed`; DSH pushes `host/archived-sessions-changed` to the browser, so the sidebar and the archive page refresh immediately.
 - **In-memory cache consistency (fixed)**: DSH's `WorkspaceRegistry` is the single writer and its `archivedSessionIds` getter reads the in-memory `state` directly. When rewriting the store, this plugin **synchronously updates `registry.state.archivedSessionIds`** and uses the official `WorkspaceEntity.detachSession` to remove workspace bookkeeping (also refreshing the entity.record cache); so unarchive → archive cycles and hard-refresh baseline rebuilds never lose or hide sessions.
 - **Archived sessions only**: delete/unarchive first validates that the session actually exists in `archivedSessionIds`; non-archived sessions are never touched.
-- **Live-session handling (fixed)**: after an agent finishes, its session still stays in DSH memory as a live Session (`ctx.sessions`); deleting files alone does not remove it from the frontend (`session.list` still returns the live part and the sidebar shows it "resurrected"). When deleting a live session: deletion is refused **only if the agent is truly running (`agent.status === "running"`)**; for idle live sessions (agent idle or no agent) it first calls `sessions.detachEntered` to remove it from memory (triggers `session/disposed` → DSH pushes `host/session-removed` → the sidebar removes it immediately, and the agent-loop cleans up the associated idle agent), **then** deletes the files and clears the records (so a later DSH flush cannot write the logs back to disk).
+- **Live-session handling (fixed)**: after an agent finishes, its session still stays in DSH memory as a live Session (`ctx.sessions`); deleting files alone does not remove it from the frontend (`session.list` still returns the live part and the sidebar shows it "resurrected"). When deleting a live session: deletion is refused **only if the agent is truly running (`agent.status === "running"`)**; for idle live sessions (agent idle or no agent) it first calls `sessions.detachEntered` to remove it from memory (triggers `session/disposed` → DSH pushes `api-session/removed` → the sidebar removes it immediately, and the agent-loop cleans up the associated idle agent), then **awaits the durability barrier** and only afterwards deletes the files and clears the records.
+  - Caveat: when the frontend receives `api-session/removed` for a row whose `origin === "subagent"` (or whose id is address-retained), DSH downgrades row removal to a `running: false` flip and keeps the row; for such sessions judge by the result after a hard refresh.
 
 > [!WARNING]
 > "Delete" and "Delete all" are **permanent deletions**: the session log file, archive marker and workspace bookkeeping are all removed — **irreversible**.

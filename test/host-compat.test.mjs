@@ -4,7 +4,114 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import test from "node:test";
-import { apply, deleteSession, inject } from "../index.js";
+import { apply, deleteSession, inject, readArchivedReport } from "../index.js";
+
+// Optional integration against the installed DSH backend, not a hand-written list mock.
+for (const compression of ["none", "zstd"]) for (const noCwd of [false, true]) test(`real DSH ${compression} snapshots delete ungrouped artifacts (noCwd=${noCwd})`, {
+  skip: !process.env.DSH_TEST_INSTALL_ROOT
+}, async (t) => {
+  const base = process.env.DSH_TEST_INSTALL_ROOT + "/node_modules/@deepseek-ai/";
+  const { Context } = await import(base + "cordis/lib/index.js");
+  const { default: Backend } = await import(base + "dsh-session-persistence-jsonl/lib/index.js");
+  const root = mkdtempSync(join(tmpdir(), "archive-real-backend-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const backend = new Backend(new Context(), { root, compression });
+  const header = { version: 3, id: "session-1", createdAt: 123, ...(noCwd ? {} : { cwd: root }), isSeeded: false };
+  const writer = await backend.create(header);
+  await writer.flush();
+  await writer.close();
+  const artifact = backend.locate(header).path;
+  const host = makeHost({ includeRegistry: true, workspacePath: "/unrelated-workspace", services: {
+    sessionPersistence: backend, sessions: { get: () => undefined }
+  } });
+  await host.ctx.get("workspaceRegistry").get("workspace-1").detachSession(header.id);
+  const report = await readArchivedReport(host.ctx);
+  const response = await invoke(host, "/api/archive-manager/delete", { sessionId: header.id });
+  assert.equal(response.body.ok, true);
+  assert.equal(existsSync(artifact), false, "successful delete must remove the real DSH artifact");
+  assert.deepEqual(await backend.list(), [], "DSH must no longer list the deleted session");
+  assert.equal(report.sessions[0].cwd, noCwd ? undefined : root);
+  assert.equal(report.sessions[0].createdAt, 123);
+});
+
+test("real DSH delete-all removes multiple snapshot-backed artifacts", {
+  skip: !process.env.DSH_TEST_INSTALL_ROOT
+}, async (t) => {
+  const base = process.env.DSH_TEST_INSTALL_ROOT + "/node_modules/@deepseek-ai/";
+  const { Context } = await import(base + "cordis/lib/index.js");
+  const { default: Backend } = await import(base + "dsh-session-persistence-jsonl/lib/index.js");
+  const root = mkdtempSync(join(tmpdir(), "archive-real-batch-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const backend = new Backend(new Context(), { root, compression: "zstd" });
+  const ids = ["session-1", "session-2"];
+  for (const id of ids) {
+    const writer = await backend.create({ version: 3, id, createdAt: 123, cwd: root, isSeeded: false });
+    await writer.flush();
+    await writer.close();
+  }
+  const host = makeHost({ archived: ids, includeRegistry: true, services: {
+    sessionPersistence: backend, sessions: { get: () => undefined }
+  } });
+  const response = await invoke(host, "/api/archive-manager/delete-all");
+  assert.equal(response.body.deleted, 2);
+  assert.deepEqual(response.body.failures, []);
+  assert.deepEqual(await backend.list(), []);
+  assert.deepEqual(host.globalState().archivedSessionIds, []);
+  assert.deepEqual(host.workspaceRecord().sessionIds, []);
+});
+
+test("unreadable or malformed persistence snapshots never clear archive markers", async () => {
+  for (const list of [async () => { throw new Error("read failed"); }, async () => [{ revision: "bad" }]]) {
+    let detached = false;
+    const host = makeHost({ includeRegistry: true, services: {
+      sessionPersistence: { list },
+      sessions: { get: () => ({ id: "session-1" }), detachEntered: () => { detached = true; } }
+    } });
+    const response = await invoke(host, "/api/archive-manager/delete", { sessionId: "session-1" });
+    assert.equal(response.body.code, "persistence-read-failed");
+    assert.equal(detached, false);
+    assert.deepEqual(host.globalState().archivedSessionIds, ["session-1"]);
+    assert.deepEqual(host.workspaceRecord().sessionIds, ["session-1"]);
+  }
+});
+
+test("a listed snapshot without a resolvable artifact is not an already-deleted session", async () => {
+  const host = makeHost({ includeRegistry: true, services: {
+    sessionPersistence: { list: async () => [{ header: { id: "session-1" }, revision: "r1" }] },
+    sessions: { get: () => undefined }
+  } });
+  const response = await invoke(host, "/api/archive-manager/delete", { sessionId: "session-1" });
+  assert.equal(response.body.ok, false);
+  assert.deepEqual(host.globalState().archivedSessionIds, ["session-1"]);
+});
+
+test("snapshot deletion verifies backend absence before clearing archive records", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "archive-stat-verification-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  for (const outcome of ["absent", "present", "error"]) {
+    const dir = join(root, outcome, "session-1");
+    mkdirSync(dir, { recursive: true });
+    const header = { id: "session-1", cwd: root };
+    const host = makeHost({ includeRegistry: true, services: {
+      sessions: { get: () => undefined },
+      sessionPersistence: {
+        list: async () => [{ header, revision: "r1" }],
+        locate: (value) => {
+          assert.equal(value, header);
+          return { path: join(dir, "session.jsonl") };
+        },
+        stat: async () => {
+          if (outcome === "error") throw new Error("backend read failed");
+          return outcome === "present" ? { header, revision: "r2" } : undefined;
+        }
+      }
+    } });
+    const response = await invoke(host, "/api/archive-manager/delete", { sessionId: header.id });
+    assert.equal(response.body.ok, outcome === "absent");
+    assert.deepEqual(host.globalState().archivedSessionIds, outcome === "absent" ? [] : [header.id]);
+    assert.deepEqual(host.workspaceRecord().sessionIds, outcome === "absent" ? [] : [header.id]);
+  }
+});
 
 function makeHost({ archived = ["session-1"], includeRegistry = false, services = {}, workspacePath = "/tmp/project" } = {}) {
   let globalState = { archivedSessionIds: archived.slice() };
@@ -221,7 +328,8 @@ test("idle live deletion detaches memory, deletes the artifact and cleans both r
     services: {
       sessionPersistence: {
         list: async () => [{ id: "session-1", cwd: "/tmp/project" }],
-        locate: () => ({ kind: "jsonl", path: artifact })
+        locate: () => ({ kind: "jsonl", path: artifact }),
+        flush: async () => {}
       },
       sessions: {
         get: () => live,
@@ -310,6 +418,241 @@ test("delete keeps the archive marker when detachSession leaves workspace member
 
   assert.equal(response.body.ok, false);
   assert.equal(response.body.code, "workspace-membership-not-removed");
+  assert.deepEqual(host.globalState().archivedSessionIds, ["session-1"]);
+  assert.deepEqual(host.workspaceRecord().sessionIds, ["session-1"]);
+});
+
+test("delete waits for the detached session's final writer flush before removing the artifact", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "dsh-archive-final-drain-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const artifactDir = join(root, "session-1");
+  const artifact = join(artifactDir, "events.jsonl");
+  mkdirSync(artifactDir, { recursive: true });
+  writeFileSync(artifact, "{}\n", "utf8");
+
+  // DSH 的 session/disposed 监听器只执行 writer.close().catch(…)，不把这个 Promise
+  // 交回调用方：最终 drain 无条件落地，与插件是否等待无关。这里让写回由一个「无人
+  // 等待也会完成」的 drain Promise 触发（固定 20ms），flush 只负责把这个 Promise
+  // 暴露给调用方。修复前插件不等它 → rm 之后 artifact 在同一 tick 内被重建。
+  // list() 是 DSH session.list 的扫描入口：只有磁盘上仍存在 artifact 时才会把该
+  // 会话报回侧边栏 —— 用它直接断言用户可见症状（删除后又出现在侧边栏）。
+  let settled = 0;
+  let drain = null;
+  const persistence = {
+    list: async () => (existsSync(artifactDir) ? [{ id: "session-1", cwd: "/tmp/project" }] : []),
+    locate: () => ({ kind: "jsonl", path: artifact }),
+    flush() {
+      return drain ?? Promise.resolve();
+    }
+  };
+  const host = makeHost({
+    includeRegistry: true,
+    services: {
+      sessionPersistence: persistence,
+      sessions: {
+        get: () => ({ id: "session-1" }),
+        liveEntryFor: () => ({ id: "session-1" }),
+        detachEntered: () => {
+          drain = new Promise((resolve) => {
+            setTimeout(() => {
+              // 最终 drain：把仍是「关闭中」的会话 artifact 重新落盘。
+              mkdirSync(artifactDir, { recursive: true });
+              writeFileSync(artifact, "{}\n", "utf8");
+              settled += 1;
+              resolve();
+            }, 20);
+          });
+          drain.catch(() => {});
+        }
+      },
+      agents: { get: () => ({ status: "idle" }) }
+    }
+  });
+
+  const response = await invoke(host, "/api/archive-manager/delete", { sessionId: "session-1" });
+  const artifactGoneAtReturn = !existsSync(artifactDir);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  // 模拟删除成功后客户端 refreshSessions() → DSH session.list 重新扫描磁盘。
+  const listedAfterRefresh = await persistence.list();
+
+  assert.equal(response.body.ok, true);
+  assert.equal(settled, 1);
+  assert.equal(artifactGoneAtReturn, true);
+  assert.equal(existsSync(artifactDir), false);
+  assert.deepEqual(listedAfterRefresh, []);
+  assert.deepEqual(host.globalState().archivedSessionIds, []);
+  assert.deepEqual(host.registryState().archivedSessionIds, []);
+  assert.deepEqual(host.workspaceRecord().sessionIds, []);
+});
+
+test("delete-all reuses the wait-for-final-drain path for every archived session", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "dsh-archive-drain-all-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const artifactDir = join(root, "session-1");
+  const artifact = join(artifactDir, "events.jsonl");
+  mkdirSync(artifactDir, { recursive: true });
+  writeFileSync(artifact, "{}\n", "utf8");
+
+  let settled = 0;
+  let drain = null;
+  const persistence = {
+    list: async () => [{ id: "session-1", cwd: "/tmp/project" }],
+    locate: () => ({ kind: "jsonl", path: artifact }),
+    flush() {
+      return drain ?? Promise.resolve();
+    }
+  };
+  const host = makeHost({
+    archived: ["session-1"],
+    includeRegistry: true,
+    services: {
+      sessionPersistence: persistence,
+      sessions: {
+        get: () => ({ id: "session-1" }),
+        liveEntryFor: () => ({ id: "session-1" }),
+        detachEntered: () => {
+          drain = new Promise((resolve) => {
+            setTimeout(() => {
+              mkdirSync(artifactDir, { recursive: true });
+              writeFileSync(artifact, "{}\n", "utf8");
+              settled += 1;
+              resolve();
+            }, 20);
+          });
+          drain.catch(() => {});
+        }
+      },
+      agents: { get: () => ({ status: "idle" }) }
+    }
+  });
+
+  const response = await invoke(host, "/api/archive-manager/delete-all", {});
+  await new Promise((resolve) => setTimeout(resolve, 40));
+
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.deleted, 1);
+  assert.equal(settled, 1);
+  assert.equal(existsSync(artifactDir), false);
+  assert.deepEqual(host.globalState().archivedSessionIds, []);
+  assert.deepEqual(host.registryState().archivedSessionIds, []);
+  assert.deepEqual(host.workspaceRecord().sessionIds, []);
+});
+
+test("live deletion refuses when the durability barrier is missing or failing", async () => {
+  const running = async (persistence) => {
+    const host = makeHost({
+      includeRegistry: true,
+      services: {
+        sessionPersistence: persistence,
+        sessions: {
+          get: () => ({ id: "session-1" }),
+          liveEntryFor: () => ({ id: "session-1" }),
+          detachEntered: () => {}
+        },
+        agents: { get: () => ({ status: "idle" }) }
+      }
+    });
+    return { host, response: await invoke(host, "/api/archive-manager/delete", { sessionId: "session-1" }) };
+  };
+
+  const missing = await running({ list: async () => [] });
+  assert.equal(missing.response.status, 503);
+  assert.equal(missing.response.body.code, "session-persistence-incompatible");
+  assert.deepEqual(missing.host.globalState().archivedSessionIds, ["session-1"]);
+  assert.deepEqual(missing.host.workspaceRecord().sessionIds, ["session-1"]);
+
+  const failing = await running({
+    list: async () => [],
+    flush: async () => { throw new Error("drain failed"); }
+  });
+  assert.equal(failing.response.status, 503);
+  assert.equal(failing.response.body.code, "persistence-flush-failed");
+  assert.deepEqual(failing.host.globalState().archivedSessionIds, ["session-1"]);
+  assert.deepEqual(failing.host.workspaceRecord().sessionIds, ["session-1"]);
+});
+
+test("non-live deletion does not require the durability barrier", async () => {
+  const root = mkdtempSync(join(tmpdir(), "dsh-archive-non-live-"));
+  const artifactDir = join(root, "session-1");
+  mkdirSync(artifactDir, { recursive: true });
+  const host = makeHost({
+    includeRegistry: true,
+    services: {
+      sessionPersistence: {
+        list: async () => [{ id: "session-1", cwd: "/tmp/project" }],
+        locate: () => ({ kind: "jsonl", path: join(artifactDir, "events.jsonl") })
+      },
+      sessions: { get: () => undefined }
+    }
+  });
+  try {
+    const response = await invoke(host, "/api/archive-manager/delete", { sessionId: "session-1" });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.ok, true);
+    assert.equal(existsSync(artifactDir), false);
+    assert.deepEqual(host.globalState().archivedSessionIds, []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("delete falls back to workspace bookkeeping when the stored header has no cwd", async (t) => {
+  const dshHome = mkdtempSync(join(tmpdir(), "dsh-archive-nocwd-"));
+  const previous = process.env.DSH_HOME;
+  process.env.DSH_HOME = dshHome;
+  t.after(() => {
+    rmSync(dshHome, { recursive: true, force: true });
+    if (previous === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = previous;
+  });
+  const projectPath = "/tmp/archive-project";
+  const artifactDir = join(dshHome, "sessions", "--tmp-archive-project--", "session-1");
+  mkdirSync(artifactDir, { recursive: true });
+  writeFileSync(join(artifactDir, "events.jsonl"), "{}\n", "utf8");
+
+  // 真实 DSH 的 persistence.list() 对「已进入内存但还没落盘的 live 会话」会回放
+  // tracker 里的 header，这种快照可能缺 cwd；此时按官方 locate() 推导出的路径落在
+  // `_no-cwd/…`，rm 静默 no-op。旧实现因此返回 ok:true 却一个文件都没删。
+  const host = makeHost({
+    archived: ["session-1"],
+    includeRegistry: true,
+    workspacePath: projectPath,
+    services: {
+      sessionPersistence: {
+        list: async () => [{ id: "session-1" }],
+        locate: () => ({ kind: "jsonl", path: join(dshHome, "sessions", "_no-cwd", "session-1", "events.jsonl") })
+      },
+      sessions: { get: () => undefined }
+    }
+  });
+
+  const response = await invoke(host, "/api/archive-manager/delete", { sessionId: "session-1" });
+
+  assert.equal(response.body.ok, true);
+  assert.equal(existsSync(artifactDir), false);
+  assert.deepEqual(host.globalState().archivedSessionIds, []);
+  assert.deepEqual(host.registryState().archivedSessionIds, []);
+  assert.deepEqual(host.workspaceRecord().sessionIds, []);
+});
+
+test("delete refuses to claim success when nothing could be deleted", async () => {
+  const host = makeHost({
+    archived: ["session-1"],
+    includeRegistry: true,
+    services: {
+      sessionPersistence: {
+        list: async () => [{ id: "session-1" }],
+        locate: () => ({ kind: "jsonl", path: "/tmp/_no-cwd/session-1/events.jsonl" })
+      },
+      sessions: { get: () => undefined }
+    }
+  });
+
+  // 该会话只有归档标记：任何目录都不存在，删除必须显式失败，而不是假成功。
+  const result = await deleteSession(host.ctx, "session-1");
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "delete-file-failed");
   assert.deepEqual(host.globalState().archivedSessionIds, ["session-1"]);
   assert.deepEqual(host.workspaceRecord().sessionIds, ["session-1"]);
 });

@@ -8,7 +8,7 @@
 DeepSeek Harness（DSH）Web 界面插件：在设置窗口新增「归档」页，查看、筛选、排序、取消归档与彻底删除已归档会话。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.1.7-blue.svg?style=for-the-badge)](package.json)
+[![Version](https://img.shields.io/badge/version-0.1.9-blue.svg?style=for-the-badge)](package.json)
 [![DSH](https://img.shields.io/badge/DSH-0.1.0--rc.6%2B-purple.svg?style=for-the-badge)](https://github.com/deepseek-ai/deepseek-harness)
 
 </div>
@@ -144,7 +144,8 @@ flowchart LR
     H1 --> SP["sessionPersistence / sessionQuery"]
     H2 --> WS
     H3 --> WS
-    H3 --> FS["fs.rm 删除会话日志目录"]
+    H3 --> FL["等待 sessionPersistence.flush 排空持久化"]
+    FL --> FS["fs.rm 删除会话日志目录"]
     H4 --> H3
 ```
 
@@ -156,11 +157,14 @@ flowchart LR
 
 - **无官方 unarchive / 删除会话 API**：DSH 主机端 `workspaceRegistry` 只暴露 `archiveSession`，没有 `unarchiveSession`，也没「删除会话」接口。本插件直接读写 `storageDomain.get('workspace')` 领域存储（`~/.dsh/storages/workspace.json`），严格保持其 schema。
 - **删除为彻底删除**：删除会话会删掉 `~/.dsh/sessions/<项目目录>/<sessionId>/` 下的日志文件，不可恢复。DSH 的 SQLite 搜索索引会在下一次 reconciliation 自动清理该会话。
-- **删除先删文件、后清记录**：删除时先用官方 `sessionPersistence.locate(header)` 定位会话日志目录（不可用时回退 header.cwd / 工作区记账路径），**确认日志文件删除成功后**才移除归档标记与工作区记账；若日志删除失败（无法定位、仍存在、IO 错误），返回错误且**不改动归档状态**——会话保持隐藏，不会「复活」到侧边栏。
+- **删除先删文件、后清记录**：删除时先定位会话日志目录，**确认日志文件删除成功后**才移除归档标记与工作区记账；若日志删除失败（无法定位、仍存在、IO 错误），返回错误且**不改动归档状态**——会话保持隐藏，不会「复活」到侧边栏。
+- **持久化快照兼容与删除复核**：DSH 0.1.5-rc.1 的 `sessionPersistence.list()` 返回 `{ header, revision }`，不是裸 header。此前直接读取条目的 `id` / `cwd`，导致找不到真实会话；路径兜底也失败时，误判日志不存在并清除归档标记，使仍在磁盘的会话重新显示。现在统一解包快照（兼容旧版裸 header），优先用实际 header 调用 `locate()`，支持自定义存储根目录与合法的 `_no-cwd` 路径；删除后通过可用的 `stat(id)` 复核。列表读取失败、格式不兼容、仍能查到会话或无法定位已列出的会话时，均保留归档标记并报错。
+- **live 持久化排空防护**：保留摘除空闲 live 会话后 `await sessionPersistence.flush()` 的防护；缺少该能力或调用失败时拒绝清除归档标记。该屏障排空当前活跃的 write handles，但上一轮将异步写回认定为本问题根因的结论未经真实后端复现；本轮实际复现并修复的是快照结构解析错误。
 - **运行中即时生效**：写入 global 会触发 `domain/changed`，DSH 会向浏览器推送 `host/archived-sessions-changed`，侧边栏与归档页即时刷新。
 - **内存缓存一致性（已修复）**：DSH 的 `WorkspaceRegistry` 是单一写入者，其 `archivedSessionIds` getter 直接读内存 `state`。本插件改写存储时会**同步更新 `registry.state.archivedSessionIds`**，并用官方 `WorkspaceEntity.detachSession` 移除工作区记账（同时更新 entity.record 缓存）；因此取消归档后再归档、硬刷新重建基线都不会出现会话消失/不显示的问题。
 - **仅支持归档会话**：删除/取消归档前会校验该会话确实存在于 `archivedSessionIds`，对未归档会话不会操作。
-- **live 会话处理（已修复）**：agent 结束后的会话仍会作为 live Session 留在 DSH 内存（`ctx.sessions`），仅删文件不会让前端移除它（`session.list` 的 live 部分仍返回，侧边栏显示「复活」）。删除时若会话是 live：**仅当 agent 真正运行中（`agent.status === "running"`）才拒绝删除**；空闲 live（agent idle 或没有 agent）→ 先调用 `sessions.detachEntered` 将其从内存移除（触发 `session/disposed` → DSH 推送 `host/session-removed` → 前端侧边栏立即移除，agent-loop 也会自动清理关联的 idle agent），**再**删文件与清记录（避免 DSH 后续 flush 把日志写回磁盘）。
+- **live 会话处理（已修复）**：agent 结束后的会话仍会作为 live Session 留在 DSH 内存（`ctx.sessions`），仅删文件不会让前端移除它（`session.list` 的 live 部分仍返回，侧边栏显示「复活」）。删除时若会话是 live：**仅当 agent 真正运行中（`agent.status === "running"`）才拒绝删除**；空闲 live（agent idle 或没有 agent）→ 先调用 `sessions.detachEntered` 将其从内存移除（触发 `session/disposed` → DSH 推送 `api-session/removed` → 前端侧边栏立即移除，agent-loop 也会自动清理关联的 idle agent），**再等待持久化排空屏障**，之后才删文件与清记录（避免 DSH 的异步最终 drain 把日志写回磁盘）。
+  - 注意：前端收到 `api-session/removed` 时，若该行 `origin === "subagent"` 或被 address 保留，DSH 会把「删除行」降级为「running=false」而不移除该行；此类会话请以硬刷新后的结果为准。
 
 > [!WARNING]
 > 「删除」与「删除全部」均为**彻底删除**：会话日志文件、归档标记与工作区记账会被一并移除，**不可恢复**。

@@ -38,8 +38,9 @@
  *   失败返回 { ok:false, code, message }
  */
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { rm, stat } from "node:fs/promises";
+import { existsSync } from "node:fs";
 
 const name = "dsh-archive-manager";
 const inject = ["webServer", "storageDomain", "sessionPersistence"];
@@ -139,6 +140,83 @@ function responseStatus(result) {
 
 function sameIds(left, right) {
   return Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((id, index) => id === right[index]);
+}
+
+// DSH 0.1.5 returns SessionPersistenceSnapshot { header, revision }, while
+// older providers returned bare headers. Normalize at the provider boundary.
+async function storedHeaders(persistence) {
+  const rows = await persistence.list();
+  if (!Array.isArray(rows)) throw new Error("sessionPersistence.list() 未返回数组");
+  return rows.map((row) => {
+    const header = row?.header ?? row;
+    if (!header || typeof header.id !== "string" || header.id.length === 0) {
+      throw new Error("sessionPersistence.list() 返回了不兼容的会话快照");
+    }
+    return header;
+  });
+}
+
+/**
+ * 检查候选目录名是否符合目标会话 ID；这不等同于校验目录内容身份。
+ * 真实的无 cwd header 可以合法定位到 `_no-cwd`，不可一概拒绝。
+ */
+function dirBelongsToSession(dir, sessionId) {
+  try {
+    return basename(dir) === encodeSegment(sessionId);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 按优先级收集「可能是该会话 artifact 目录」的候选，并只返回真实存在的那些。
+ * 顺序即优先顺序：官方 locate 推导出的目录优先，其次是 workspace 记账路径。
+ */
+function artifactDirCandidates(ctx, dom, persistence, sessionId, header) {
+  const candidates = [];
+  const push = (dir) => {
+    if (typeof dir === "string" && dir.length > 0 && !candidates.includes(dir) && dirBelongsToSession(dir, sessionId)) {
+      candidates.push(dir);
+    }
+  };
+
+  // A genuine cwd-less header belongs in the backend's _no-cwd directory.
+  // Pass the normalized header, never the surrounding persistence snapshot.
+  if (header !== undefined && typeof persistence.locate === "function") {
+    try {
+      const loc = persistence.locate(header);
+      if (loc && typeof loc.path === "string" && loc.path.length > 0) push(dirname(loc.path));
+    } catch {
+      /* 交给后续候选 */
+    }
+  }
+  if (header && typeof persistence.locate !== "function") push(sessionDirFor(sessionId, header.cwd));
+
+  // ② workspace 记账记录的 path（兼容回退，并非持久化权威路径），
+  //    ③ 以及当前 cwd。两者都可能是会话创建时真实使用的项目目录。
+  const recordedPaths = [];
+  try {
+    const table = dom.table("workspaces");
+    for (const [, rec] of table.entries()) {
+      if (Array.isArray(rec.sessionIds) && rec.sessionIds.includes(sessionId) && typeof rec.path === "string") {
+        recordedPaths.push(rec.path);
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (typeof ctx.cwd === "string" && ctx.cwd.length > 0) recordedPaths.push(ctx.cwd);
+  } catch {
+    /* ignore */
+  }
+  for (const cwd of recordedPaths) push(sessionDirFor(sessionId, cwd));
+
+  try {
+    return candidates.filter((dir) => existsSync(dir));
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -242,7 +320,7 @@ async function readArchivedReport(ctx) {
   let headers = [];
   try {
     const persistence = ctx.get("sessionPersistence");
-    if (persistence !== undefined) headers = await persistence.list();
+    if (persistence !== undefined) headers = await storedHeaders(persistence);
   } catch {
     /* header 列表读取失败时降级：用 workspace 记账推断属主，标题留空 */
   }
@@ -406,6 +484,13 @@ async function deleteSession(ctx, sessionId, fileOps = { rm, stat }) {
     return unavailable("sessions-unavailable", "sessions 服务不可用，无法确认会话是否仍在运行");
   }
 
+  // Read failures and unsupported snapshots must never become "already absent".
+  try {
+    await storedHeaders(persistence);
+  } catch (error) {
+    return unavailable("persistence-read-failed", `读取会话持久化快照失败: ${String(error)}`);
+  }
+
   // 0) 处理 live session（DSH 内存中的 Session 对象）。
   //    若会话仍在 ctx.sessions（agent 结束后会话保持 attached），仅删文件不会让
   //    DSH 前端移除它：session.list 的 live 部分仍返回它，侧边栏显示"复活"。
@@ -440,106 +525,94 @@ async function deleteSession(ctx, sessionId, fileOps = { rm, stat }) {
     if (agent !== undefined && agent.status === "running") {
       return { ok: false, code: "session-running", message: "该会话正在运行，请先停止或等待结束后再删除" };
     }
+    if (typeof persistence.flush !== "function") {
+      return unavailable("session-persistence-incompatible", "sessionPersistence 缺少 flush 能力，无法安全删除");
+    }
     try {
       const entry = sessionsSvc.liveEntryFor(live);
       sessionsSvc.detachEntered(entry);
     } catch (error) {
       return { ok: false, code: "session-detach-failed", message: `从内存移除 live session 失败: ${String(error)}` };
     }
-  }
 
-  // 1) 定位会话日志目录。
-  //    优先使用官方 sessionPersistence.locate(header)（backend 权威 artifact 路径）；
-  //    不可用时回退到 header.cwd / workspace 记账 path 自行编码目录名。
-  let targetDir = null;
-  let located = false;
-  try {
-    // 先取 header（list 是轻量元数据列出，不解析完整日志）
-    let header;
+    // 保留 live writer 的排空防护。dispose 的异步 close 不由 detach 返回，
+    // flush 排空当前仍活跃的 write handles；这不是本次复现的根因证明。
     try {
-      const headers = await persistence.list();
-      header = headers.find((h) => h.id === sessionId);
-    } catch {
-      /* ignore */
-    }
-    if (header !== undefined && typeof persistence.locate === "function") {
-      const loc = persistence.locate(header);
-      if (loc && typeof loc.path === "string" && loc.path.length > 0) {
-        const { dirname } = await import("node:path");
-        targetDir = dirname(loc.path);
-        located = true;
-      }
-    }
-  } catch {
-    /* fall back below */
-  }
-
-  if (!located) {
-    // 回退：用 header.cwd 或 workspace 记账 path 编码
-    let cwd;
-    try {
-      if (typeof persistence.load === "function") {
-        try {
-          const inspected = await persistence.load(sessionId);
-          if (inspected && inspected.header && typeof inspected.header.cwd === "string") cwd = inspected.header.cwd;
-        } catch {
-          /* fall back to workspace 记账 */
-        }
-      }
-    } catch {
-      /* ignore */
-    }
-    if (cwd === undefined) {
-      try {
-        const table = dom.table("workspaces");
-        for (const [, rec] of table.entries()) {
-          if (Array.isArray(rec.sessionIds) && rec.sessionIds.includes(sessionId) && typeof rec.path === "string") {
-            cwd = rec.path;
-            break;
-          }
-        }
-      } catch {
-        /* ignore */
-      }
-    }
-    targetDir = sessionDirFor(sessionId, cwd);
-  }
-
-  // 2) 先删除日志目录并确认成功。
-  //    删除失败时返回错误且不改动归档状态 —— 会话保持隐藏，不会"复活"到侧边栏。
-  if (targetDir !== null) {
-    try {
-      await fileOps.rm(targetDir, { recursive: true, force: true });
-      const exists = await fileOps.stat(targetDir).then(() => true).catch(() => false);
-      if (exists) {
-        return { ok: false, code: "delete-file-failed", message: "日志目录删除后仍存在" };
-      }
+      await persistence.flush();
     } catch (error) {
-      return { ok: false, code: "delete-file-failed", message: `删除日志目录失败: ${String(error)}` };
+      return unavailable("persistence-flush-failed", `等待会话持久化排空失败: ${String(error)}`);
     }
-  } else {
-    // 无法定位日志目录：若该会话在持久化列表中仍存在，则属于不可删除的异常状态；
-    // 保持归档标记不变，返回失败，避免"半删"造成会话复活。
-    let stillListed = false;
-    try {
-      const headers = await persistence.list();
-      stillListed = headers.some((h) => h.id === sessionId);
-    } catch {
-      /* ignore */
-    }
+  }
+
+  // 1) 必须从 { header, revision } 快照解包后查找 ID 和定位目录。
+  //    把快照当 header 会误判「不存在」，继而仅清归档标记、留下真实日志。
+  let header;
+  try {
+    const headers = await storedHeaders(persistence);
+    header = headers.find((h) => h.id === sessionId);
+  } catch (error) {
+    return unavailable("persistence-read-failed", `读取会话持久化快照失败: ${String(error)}`);
+  }
+  const candidates = artifactDirCandidates(ctx, dom, persistence, sessionId, header);
+
+  // 2) 逐个候选执行删除并确认；不存在任何候选时不得谎报成功。
+  let deletedDir = null;
+  let triedDir = null;
+  if (candidates.length === 0) {
+    // 没有任何候选目录存在于磁盘上。若该会话仍在持久化列表中，说明它的 artifact
+    // 确实还在、只是我们没能定位 —— 必须显式失败，保持归档标记不变。
+    const stillListed = header !== undefined;
     if (stillListed) {
       return { ok: false, code: "delete-file-failed", message: "无法定位该会话的日志目录，删除失败（会话仍保留在归档中）" };
     }
-    // 会话已不在持久化列表（日志已丢失/被清理）——视作可删除：仅需清理归档与记账。
+    // 会话已不在持久化列表（日志本就不存在）——仅需清理归档与记账。
+  } else {
+    triedDir = candidates[0];
+    let lastError = null;
+    for (const dir of candidates) {
+      try {
+        await fileOps.rm(dir, { recursive: true, force: true });
+        const exists = await fileOps.stat(dir).then(() => true).catch((error) => {
+          if (error.code === "ENOENT") return false;
+          throw error;
+        });
+        if (!exists) {
+          deletedDir = dir;
+          break;
+        }
+        lastError = new Error("目录删除后仍存在");
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (deletedDir === null) {
+      return {
+        ok: false,
+        code: "delete-file-failed",
+        message: `删除日志目录失败（已尝试 ${candidates.length} 个候选路径）: ${String(lastError)}`
+      };
+    }
   }
 
-  // 3) 文件已确认删除（或日志本就不存在）后，移除归档集合 + workspace 记账。
+  // Current DSH exposes an authoritative stat(id), including pending entries.
+  // Confirm absence there too: deleting a guessed path is not proof of deletion.
+  if (typeof persistence.stat === "function") {
+    try {
+      if (await persistence.stat(sessionId) !== undefined) {
+        return { ok: false, code: "delete-file-failed", message: "持久化服务仍返回该会话，归档状态未修改" };
+      }
+    } catch (error) {
+      return unavailable("persistence-read-failed", `复核会话删除失败: ${String(error)}`);
+    }
+  }
+
+  // 3) 文件已确认删除（或本就不存在）后，移除归档集合 + workspace 记账。
   const removed = await writeRemove(ctx, sessionId);
   if (!removed.ok) {
     return { ok: false, code: removed.code, message: `记录清理失败: ${removed.message}` };
   }
 
-  return { ok: true, fileDeleted: true };
+  return { ok: true, fileDeleted: true, deletedDir, triedDir };
 }
 
 // ---- 路由处理器 ----
