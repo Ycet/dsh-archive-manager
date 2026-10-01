@@ -346,10 +346,10 @@ window.__ModuleLoader__.load({
       const runAction = (action, onResult) => {
         set({ busy: true, confirm: null });
         action()
-          .then((res) => {
+          .then(async (res) => {
             let notice = null;
             if (res && res.ok === true) {
-              notice = onResult ? onResult(res) : null;
+              notice = onResult ? await onResult(res) : null;
             } else {
               notice = (res && res.message) || t("loadError");
             }
@@ -369,18 +369,18 @@ window.__ModuleLoader__.load({
       const onDelete = (sessionId, title) => {
         runAction(
           () => postJson("/api/archive-manager/delete", { sessionId }),
-          (res) => {
+          async (res) => {
             // 删除成功后，让 DSH 前端会话列表立即重拉：
             // 文件删除不会触发 host/session-removed 推送，侧边栏条目会残留到硬刷新。
-            if (refreshSessions !== null) refreshSessions();
+            if (refreshSessions !== null) await refreshSessions();
             const root = t("deleteOk", { title });
             return res.fileDeleted === false ? root + " " + t("noticeFile") : root;
           }
         );
       };
       const onDeleteAll = () => {
-        runAction(() => postJson("/api/archive-manager/delete-all", {}), (res) => {
-          if (refreshSessions !== null) refreshSessions();
+        runAction(() => postJson("/api/archive-manager/delete-all", {}), async (res) => {
+          if (refreshSessions !== null) await refreshSessions();
           if (res.deleted === res.total) return t("deleteAllOk", { n: res.deleted });
           return t("deleteAllPartial", { fail: res.failures ? res.failures.length : 0, total: res.total });
         });
@@ -566,17 +566,17 @@ window.__ModuleLoader__.load({
         }
       }
       // 删除会话后让 DSH 前端会话列表立即重拉（移除残留条目）。
-      // SessionRuntime.manager.refreshList() 会重新拉取 session.list 并
-      // 用新基线剔除已消失的会话；该内部入口在 runtime 版本里长期稳定，
-      // 缺失时静默降级（侧边栏残留仍会在硬刷新/重连后消失）。
-      const refreshSessions = () => {
+      // 优先使用公开会话刷新接口；旧版客户端回退到内部列表刷新入口。
+      const refreshSessions = async () => {
         try {
           const sessions = ctx.get("sessions");
-          if (sessions && sessions.manager && typeof sessions.manager.refreshList === "function") {
-            sessions.manager.refreshList();
+          if (sessions && typeof sessions.refresh === "function") {
+            await sessions.refresh();
+          } else if (sessions && sessions.manager && typeof sessions.manager.refreshList === "function") {
+            await sessions.manager.refreshList();
           }
-        } catch {
-          /* ignore */
+        } catch (error) {
+          ctx.logger?.warn?.(`dsh-archive-manager: 会话列表刷新失败: ${String(error)}`);
         }
       };
       const injected = () => ({ refreshSessions });

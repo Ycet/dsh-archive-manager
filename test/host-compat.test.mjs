@@ -13,10 +13,11 @@ for (const compression of ["none", "zstd"]) for (const noCwd of [false, true]) t
   const base = process.env.DSH_TEST_INSTALL_ROOT + "/node_modules/@deepseek-ai/";
   const { Context } = await import(base + "cordis/lib/index.js");
   const { default: Backend } = await import(base + "dsh-session-persistence-jsonl/lib/index.js");
+  const { SESSION_FORMAT_VERSION } = await import(base + "dsh-session/lib/index.js");
   const root = mkdtempSync(join(tmpdir(), "archive-real-backend-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const backend = new Backend(new Context(), { root, compression });
-  const header = { version: 3, id: "session-1", createdAt: 123, ...(noCwd ? {} : { cwd: root }), isSeeded: false };
+  const header = { version: SESSION_FORMAT_VERSION, id: "session-1", createdAt: 123, ...(noCwd ? {} : { cwd: root }), isSeeded: false };
   const writer = await backend.create(header);
   await writer.flush();
   await writer.close();
@@ -40,12 +41,13 @@ test("real DSH delete-all removes multiple snapshot-backed artifacts", {
   const base = process.env.DSH_TEST_INSTALL_ROOT + "/node_modules/@deepseek-ai/";
   const { Context } = await import(base + "cordis/lib/index.js");
   const { default: Backend } = await import(base + "dsh-session-persistence-jsonl/lib/index.js");
+  const { SESSION_FORMAT_VERSION } = await import(base + "dsh-session/lib/index.js");
   const root = mkdtempSync(join(tmpdir(), "archive-real-batch-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const backend = new Backend(new Context(), { root, compression: "zstd" });
   const ids = ["session-1", "session-2"];
   for (const id of ids) {
-    const writer = await backend.create({ version: 3, id, createdAt: 123, cwd: root, isSeeded: false });
+    const writer = await backend.create({ version: SESSION_FORMAT_VERSION, id, createdAt: 123, cwd: root, isSeeded: false });
     await writer.flush();
     await writer.close();
   }
@@ -240,6 +242,24 @@ test("unarchive updates durable and registry archive snapshots together", async 
   assert.equal(response.body.ok, true);
   assert.deepEqual(host.globalState().archivedSessionIds, []);
   assert.deepEqual(host.registryState().archivedSessionIds, []);
+});
+
+test("unarchive prefers the public registry API and preserves unrelated workspace state", async () => {
+  const host = makeHost({ includeRegistry: true });
+  const registry = host.ctx.get("workspaceRegistry");
+  let called = 0;
+  registry.state.pinnedSessionIds = ["pinned-session"];
+  Object.defineProperty(registry, "archivedSessionIds", { get: () => registry.state.archivedSessionIds });
+  registry.unarchiveSession = async (sessionId) => {
+    called += 1;
+    await registry.setState({ ...registry.state, archivedSessionIds: registry.state.archivedSessionIds.filter((id) => id !== sessionId) });
+  };
+  registry.setState = registry.setState.bind(registry);
+  const response = await invoke(host, "/api/archive-manager/unarchive", { sessionId: "session-1" });
+  assert.equal(response.body.ok, true);
+  assert.equal(called, 1);
+  assert.deepEqual(host.globalState().archivedSessionIds, []);
+  assert.deepEqual(registry.state.pinnedSessionIds, ["pinned-session"]);
 });
 
 test("unarchive preserves the legacy registry state fallback when setState is absent", async () => {

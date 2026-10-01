@@ -226,10 +226,6 @@ function artifactDirCandidates(ctx, dom, persistence, sessionId, header) {
 function workspaceStateAdapter(ctx, dom) {
   const registry = ctx.get("workspaceRegistry");
   if (registry === undefined) return unavailable("workspace-registry-unavailable", "workspaceRegistry 服务不可用");
-  const state = registry.state;
-  if (!state || typeof state !== "object" || !Array.isArray(state.archivedSessionIds)) {
-    return unavailable("workspace-registry-incompatible", "workspaceRegistry 状态结构与当前插件不兼容");
-  }
   let durable;
   try {
     durable = dom.global.get();
@@ -239,10 +235,21 @@ function workspaceStateAdapter(ctx, dom) {
   if (!durable || typeof durable !== "object" || !Array.isArray(durable.archivedSessionIds)) {
     return unavailable("workspace-domain-incompatible", "workspace 领域缺少 archivedSessionIds");
   }
+  // 0.1.7 使用公开的归档快照与取消归档方法，避免依赖私有 state/setState。
+  if (typeof registry.unarchiveSession === "function" && Array.isArray(registry.archivedSessionIds)) {
+    if (!sameIds(durable.archivedSessionIds, registry.archivedSessionIds)) {
+      return unavailable("workspace-state-out-of-sync", "workspace 持久化状态与 registry 快照不一致，已拒绝写入");
+    }
+    return { ok: true, registry, durable, publicApi: true };
+  }
+  const state = registry.state;
+  if (!state || typeof state !== "object" || !Array.isArray(state.archivedSessionIds)) {
+    return unavailable("workspace-registry-incompatible", "workspaceRegistry 状态结构与当前插件不兼容");
+  }
   if (!sameIds(durable.archivedSessionIds, state.archivedSessionIds)) {
     return unavailable("workspace-state-out-of-sync", "workspace 持久化状态与 registry 快照不一致，已拒绝写入");
   }
-  return { ok: true, registry, state, durable, setState: typeof registry.setState === "function" ? registry.setState.bind(registry) : null };
+  return { ok: true, registry, state, durable, publicApi: false, setState: typeof registry.setState === "function" ? registry.setState.bind(registry) : null };
 }
 
 function workspaceMembership(ctx, dom, sessionId) {
@@ -416,19 +423,33 @@ async function writeRemove(ctx, sessionId) {
     return { ok: false, code: "workspace-membership-not-removed", message: "detachSession 完成后 workspace 仍保留该会话，归档状态未修改" };
   }
 
-  const synced = await syncArchivedState(ctx, dom, nextArchived);
+  const synced = await syncArchivedState(ctx, dom, nextArchived, sessionId);
   if (!synced.ok) return synced;
   return { ok: true, touchedWorkspaces: membership.entities.map(({ workspaceId }) => workspaceId) };
 }
 
 /**
- * 持久化新的 archivedSessionIds，并将 workspaceRegistry 的内存 state 同步到
- * 同一值。rc.1 暴露可调用的 setState 时优先使用其单一写路径；旧实现才回退
- * 到 domain.set + state 替换。写入前后都验证持久化与内存快照一致。
+ * 持久化新的 archivedSessionIds。新版优先走公开 unarchiveSession；旧版
+ * 才回退到 setState/domain 写入。写入前后验证持久化与 registry 快照一致。
  */
-async function syncArchivedState(ctx, dom, nextArchived) {
+async function syncArchivedState(ctx, dom, nextArchived, sessionId) {
   const adapter = workspaceStateAdapter(ctx, dom);
   if (!adapter.ok) return adapter;
+  if (adapter.publicApi) {
+    if (typeof sessionId !== "string" || !sameIds(adapter.durable.archivedSessionIds.filter((id) => id !== sessionId), nextArchived)) {
+      return unavailable("workspace-state-incompatible", "取消归档目标与预期状态不一致");
+    }
+    try {
+      await adapter.registry.unarchiveSession(sessionId);
+      const durableAfter = dom.global.get();
+      if (!sameIds(durableAfter?.archivedSessionIds, nextArchived) || !sameIds(adapter.registry.archivedSessionIds, nextArchived)) {
+        return unavailable("workspace-state-out-of-sync", "取消归档后持久化状态与 registry 快照不一致");
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, code: "write-failed", message: `取消归档失败: ${String(error)}` };
+    }
+  }
   const nextState = { ...adapter.state, archivedSessionIds: nextArchived.slice() };
   const nextDurable = { ...adapter.durable, archivedSessionIds: nextArchived.slice() };
   try {
@@ -658,7 +679,8 @@ async function handleUnarchive(ctx, req, res) {
     const result = await syncArchivedState(
       ctx,
       dom,
-      global.archivedSessionIds.filter((id) => id !== sessionId)
+      global.archivedSessionIds.filter((id) => id !== sessionId),
+      sessionId
     );
     if (!result.ok) {
       sendJson(res, responseStatus(result), { ok: false, code: result.code, message: result.message });
