@@ -8,8 +8,8 @@
 DeepSeek Harness（DSH）Web 界面插件：在设置窗口新增「归档」页，查看、筛选、排序、取消归档与彻底删除已归档会话。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg?style=for-the-badge)](package.json)
-[![DSH](https://img.shields.io/badge/DSH-0.1.0--rc.6%2B-purple.svg?style=for-the-badge)](https://github.com/deepseek-ai/deepseek-harness)
+[![Version](https://img.shields.io/badge/version-0.2.1-blue.svg?style=for-the-badge)](package.json)
+[![DSH](https://img.shields.io/badge/DSH-0.2.1--rc.2%2B-purple.svg?style=for-the-badge)](https://github.com/deepseek-ai/deepseek-harness)
 
 </div>
 
@@ -28,6 +28,9 @@ DeepSeek Harness（DSH）Web 界面插件：在设置窗口新增「归档」页
 - [📄 许可证](#-许可证)
 
 ---
+
+> [!NOTE]
+> `0.2.1` 修正与 DSH 0.2.2-rc.1 的兼容问题：设置导航图标改走官方 `settings.section.icon` 插槽（注册 id 必须等于分区 id `archives`），旧版壳继续由 DOM 钩子兜底，两条路径靠 svg 上的 `data-dsh-archive-injected` 标记互斥；同时补上 `engines.dsh: >=0.2.1-rc.2`，让 DSH 的插件兼容性门禁对本事生效。
 
 ## 📸 界面预览
 
