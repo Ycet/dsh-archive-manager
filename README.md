@@ -8,7 +8,7 @@
 DeepSeek Harness（DSH）Web 界面插件：在设置窗口新增「归档」页，查看、筛选、排序、取消归档与彻底删除已归档会话。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg?style=for-the-badge)](package.json)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg?style=for-the-badge)](package.json)
 [![DSH](https://img.shields.io/badge/DSH-0.2.1--rc.2%2B-purple.svg?style=for-the-badge)](https://github.com/deepseek-ai/deepseek-harness)
 
 </div>
@@ -30,6 +30,8 @@ DeepSeek Harness（DSH）Web 界面插件：在设置窗口新增「归档」页
 ---
 
 > [!NOTE]
+> `0.4.0` 新增**按工作区一键删除**：每个工作区分组头部有「删除本组」按钮，二次确认后只删除该组的归档会话，「未分组」组同样支持；顶栏「删除全部」仍是全局删除，但计数改为全部归档会话数（不再随筛选变化）。同时修复包名改为 `dsh-archive-manager-ycet` 后客户端注册 id 未同步、页面提示「插件未能完成同步」的问题。
+>
 > `0.3.0` 让「删除」真正清干净：除原有的日志目录，还会移除该会话的**投影缓存**（走官方 `storageDomain` 领域 API，磁盘与内存同时失效）与**浏览器端分会话状态**（侧栏布局、输入框草稿、追问草稿、侧栏浏览器状态，以及指向它的「上次打开的会话」指针）。派生数据清理失败不会阻断主流程，只在成功提示里附带说明。
 >
 > `0.2.1` 修正与 DSH 0.2.2-rc.1 的兼容问题：设置导航图标改走官方 `settings.section.icon` 插槽（注册 id 必须等于分区 id `archives`），旧版壳继续由 DOM 钩子兜底，两条路径靠 svg 上的 `data-dsh-archive-injected` 标记互斥；同时补上 `engines.dsh: >=0.2.1-rc.2`，让 DSH 的插件兼容性门禁对本事生效。
@@ -50,7 +52,8 @@ DeepSeek Harness（DSH）Web 界面插件：在设置窗口新增「归档」页
 | **筛选** | 按「全部工作区」、某个具体工作区或「未分组」过滤归档会话；筛选菜单只列出**至少有一个已归档会话**的工作区，仅当存在未分组归档会话时才出现「未分组」选项 |
 | **排序** | 按会话名称（字母序升/降）、按会话创建时间（升/降）两种维度排序 |
 | **取消归档** | 会话从归档集合中移除，并**重新出现在左侧边栏对应工作区分组**中，可点击打开聊天窗口 |
-| **删除（二次确认）** | 可删除单个会话，或一次「删除全部」；所有删除操作都弹出二次确认弹窗，仅点击「确认删除」才真正执行 |
+| **删除（二次确认）** | 可删除单个会话、删除某个工作区的全部归档会话，或一次「删除全部」；所有删除操作都弹出二次确认弹窗，仅点击「确认删除」才真正执行 |
+| **按工作区删除** | 每个工作区分组头部有「删除本组」按钮，只删除该组的归档会话；「未分组」组同样支持。确认弹窗显示工作区名与会话数量，组内会话逐个独立删除并汇总结果 |
 | **彻底删除** | 删除会移除会话日志文件（`session.jsonl.zstd`）、归档标记及工作区记账，不可恢复 |
 | **多语言界面** | 界面文案跟随 DSH 活动语言（中文 / English） |
 
@@ -72,10 +75,10 @@ dsh plugin --profile web add dsh-archive-manager-ycet
 dsh plugin --profile web add dsh-archive-manager-ycet@link:<absolute-path-to-plugin>
 
 # 方式三：从 GitHub 安装（锁定版本 tag，需本机有 git）
-dsh plugin --profile web add "github:Ycet/dsh-archive-manager#v0.3.0"
+dsh plugin --profile web add "github:Ycet/dsh-archive-manager#v0.4.0"
 
 # 方式四：从 Release 资产安装（tarball，无需 git、无需 npm 账号）
-dsh plugin --profile web add "https://github.com/Ycet/dsh-archive-manager/releases/download/v0.3.0/dsh-archive-manager-0.3.0.tgz"
+dsh plugin --profile web add "https://github.com/Ycet/dsh-archive-manager/releases/download/v0.4.0/dsh-archive-manager-ycet-0.4.0.tgz"
 ```
 
 包声明了 `dsh.bundle` 补丁层，`dsh plugin` 会自动把加载项合入 profile 的 bundle 层，无需手动编辑 `cordis.patch.yml`。方式二、三、四均无需 npm 账号；桌面端把 `--profile web` 换成 `--profile desktop`（使用桌面端自带 CLI）。
@@ -101,8 +104,9 @@ dsh plugin --profile web add "https://github.com/Ycet/dsh-archive-manager/releas
 3. 页面上方工具条：
    - **筛选**下拉：默认「全部工作区」，可选某个具体工作区或「未分组」；菜单只列出**至少有一个已归档会话**的工作区（某工作区没有任何归档会话时不出现在菜单中），仅当存在未分组归档会话时才出现「未分组」选项；
    - **排序**下拉：按名称或创建时间升/降序；
-   - **删除全部**按钮：删除当前筛选下全部已归档会话（需二次确认）；
+   - **删除全部**按钮：删除**全部**已归档会话（不受筛选影响，需二次确认）；
 4. 会话按工作区分组展示，每组含会话标题与创建时间：
+   - **删除本组**（分组头部右侧）：二次确认后只删除该组的归档会话，确认框显示工作区名与数量；
    - **取消归档**：会话恢复到左侧边栏对应工作区分组，可点击打开；
    - **删除**：二次确认后彻底删除该会话。
 
@@ -152,6 +156,7 @@ flowchart LR
         R -->|"/api/archive-manager/unarchive"| H2["从 archivedSessionIds 移除"]
         R -->|"/api/archive-manager/delete"| H3["移除归档+记账, 删日志目录"]
         R -->|"/api/archive-manager/delete-all"| H4["逐个删除全部归档"]
+        R -->|"/api/archive-manager/delete-workspace"| H5["按 workspaceId 过滤后逐个删除"]
     end
 
     H1 --> WS["storageDomain.get('workspace')"]
@@ -161,6 +166,7 @@ flowchart LR
     H3 --> FL["等待 sessionPersistence.flush 排空持久化"]
     FL --> FS["fs.rm 删除会话日志目录"]
     H4 --> H3
+    H5 --> H4
 ```
 
 主机端写入 `workspace` 领域 global 后，DSH 启动时会校验领域状态（fail-loud）。写入严格保持 `workspace.json` 的 schema 结构不变（数组整体替换后写回），不会破坏 DSH 启动。
@@ -181,7 +187,7 @@ flowchart LR
   - 注意：前端收到 `api-session/removed` 时，若该行 `origin === "subagent"` 或被 address 保留，DSH 会把「删除行」降级为「running=false」而不移除该行；此类会话请以硬刷新后的结果为准。
 
 > [!WARNING]
-> 「删除」与「删除全部」均为**彻底删除**：会话日志文件、归档标记与工作区记账会被一并移除，**不可恢复**。
+> 「删除」「删除本组」与「删除全部」均为**彻底删除**：会话日志文件、归档标记与工作区记账会被一并移除，**不可恢复**。
 
 ### 删除范围
 
@@ -207,7 +213,7 @@ DSH 本身不提供会话删除或回收能力（官方说明见 `@deepseek-ai/d
 | `storages/session_projcache.json` | 新版逐条存储之前的旧版整文件格式，新后端不再读取；手动改动可能干扰其 `backup-and-skip` 恢复策略。 |
 | 会话搜索索引 | 当前 profile 的 `sessionQuery` 配置为 `path: ':memory:'`（`openAt: first-search`），索引只存在于内存，进程退出即消失，磁盘上没有任何索引文件需要清理。 |
 
-**失败语义**：日志删除失败 → 整体失败、归档状态不变；投影缓存或 localStorage 清理失败 → 只记日志并在成功提示中附带说明，**不回滚**已完成的删除。删除「全部」时，每个会话独立判定，派生数据残留计入 `cacheFailures` 而不影响 `deleted` 计数。
+**失败语义**：日志删除失败 → 整体失败、归档状态不变；投影缓存或 localStorage 清理失败 → 只记日志并在成功提示中附带说明，**不回滚**已完成的删除。删除「全部」或「删除本组」时，每个会话独立判定，派生数据残留计入 `cacheFailures` 而不影响 `deleted` 计数；「删除本组」只以服务端权威归档报告按 `workspaceId` 过滤，客户端只传工作区 id。
 
 > [!NOTE]
 > 投影缓存有一个已知竞态：DSH 在 `session/disposed` 时用 fire-and-forget 方式落盘检查点（`void flushSoft(...)`，没有 `await`），插件现有的 `persistence.flush()` 只排空日志写入、排不空它。若那次写回晚于本次删除，`<id>.json` 可能被重建。插件以「删除后复核 + 最多 3 次重试（间隔 150ms）」应对，仍残留时如实上报——重启 DSH 即可彻底清除。
@@ -216,7 +222,7 @@ DSH 本身不提供会话删除或回收能力（官方说明见 `@deepseek-ai/d
 
 ## ⚙️ 配置说明
 
-本插件无需任何环境变量或配置文件，开箱即用。它不新增 DSH 公共 RPC、不挂载新 Service，仅注册 4 条包内同源 HTTP 路由：
+本插件无需任何环境变量或配置文件，开箱即用。它不新增 DSH 公共 RPC、不挂载新 Service，仅注册 5 条包内同源 HTTP 路由：
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
@@ -224,6 +230,7 @@ DSH 本身不提供会话删除或回收能力（官方说明见 `@deepseek-ai/d
 | `POST` | `/api/archive-manager/unarchive` | 取消归档单个会话 |
 | `POST` | `/api/archive-manager/delete` | 彻底删除单个归档会话 |
 | `POST` | `/api/archive-manager/delete-all` | 彻底删除全部归档会话 |
+| `POST` | `/api/archive-manager/delete-workspace` | 按 `workspaceId` 彻底删除某个工作区（或未分组，传 `null`）的归档会话 |
 
 ---
 

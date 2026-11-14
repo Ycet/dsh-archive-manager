@@ -22,6 +22,11 @@
  *   POST /api/archive-manager/delete-all
  *       对当前全部归档会话逐个执行删除。
  *
+ *   POST /api/archive-manager/delete-workspace   { workspaceId }
+ *       按工作区整组删除：workspaceId 为工作区 id；未分组会话显式传 null。
+ *       目标会话一律从权威归档报告过滤（不信任客户端传来的会话列表），
+ *       逐个删除并汇总失败。
+ *
  * 归档机制与安全约定：
  *   - DSH 没有官方的 "unarchiveSession" / "删除会话" API（workspaceRegistry
  *     host 只暴露 archiveSession）。因此本插件直接读写 storageDomain 的
@@ -42,7 +47,8 @@ import { basename, dirname, join } from "node:path";
 import { rm, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 
-const name = "dsh-archive-manager";
+// 宿主插件名必须与 package.json 的 name 一致（与其它 ycet 插件同一约定）。
+const name = "dsh-archive-manager-ycet";
 const inject = ["webServer", "storageDomain", "sessionPersistence"];
 
 const JSON_HEADERS = {
@@ -837,16 +843,14 @@ async function handleDelete(ctx, req, res) {
   }
 }
 
-async function handleDeleteAll(ctx, res) {
-  const report = await readArchivedReport(ctx);
-  if (!report.ok) {
-    sendJson(res, responseStatus(report), { ok: false, code: report.code, message: report.message });
-    return;
-  }
-  const ids = report.archivedSessionIds.slice();
+/**
+ * 顺序删除一批归档会话，逐会话独立判定。
+ * 主流程（日志 + 归档记录）失败与会话成功但派生数据残留分开统计：
+ * 前者影响 deleted/total，后者只在 cacheFailures 里体现，不改变成功语义。
+ * unavailable 表示 0 成功且所有失败都是依赖不可用/状态不一致，调用方据此回 503。
+ */
+async function deleteSessionBatch(ctx, ids) {
   const failures = [];
-  // 主流程（日志 + 归档记录）失败与会话成功但派生数据残留分开统计：
-  // 前者影响 deleted/total，后者只在 cacheFailures 里体现，不改变成功语义。
   let cacheFailures = 0;
   let okCount = 0;
   for (const sid of ids) {
@@ -863,11 +867,105 @@ async function handleDeleteAll(ctx, res) {
     }
   }
   const unavailableFailure = okCount === 0 && failures.length > 0 && failures.every((failure) => failure.code.endsWith("-unavailable") || failure.code.endsWith("-incompatible") || failure.code === "workspace-state-out-of-sync");
-  if (unavailableFailure) {
-    sendJson(res, 503, { ok: false, code: failures[0].code, message: failures[0].message, deleted: 0, total: ids.length, cacheFailures, failures });
+  return {
+    deleted: okCount,
+    total: ids.length,
+    cacheFailures,
+    failures,
+    unavailable: unavailableFailure,
+    firstFailure: failures[0]
+  };
+}
+
+/** 归档报告里的 workspaceId 与请求值是否同一组（null/undefined 都算未分组）。 */
+function sameWorkspace(left, right) {
+  const normalizedLeft = left === null || left === undefined ? null : left;
+  const normalizedRight = right === null || right === undefined ? null : right;
+  return normalizedLeft === normalizedRight;
+}
+
+async function handleDeleteAll(ctx, res) {
+  const report = await readArchivedReport(ctx);
+  if (!report.ok) {
+    sendJson(res, responseStatus(report), { ok: false, code: report.code, message: report.message });
     return;
   }
-  sendJson(res, 200, { ok: true, deleted: okCount, total: ids.length, cacheFailures, failures });
+  const summary = await deleteSessionBatch(ctx, report.archivedSessionIds.slice());
+  if (summary.unavailable) {
+    sendJson(res, 503, {
+      ok: false,
+      code: summary.firstFailure.code,
+      message: summary.firstFailure.message,
+      deleted: 0,
+      total: summary.total,
+      cacheFailures: summary.cacheFailures,
+      failures: summary.failures
+    });
+    return;
+  }
+  sendJson(res, 200, {
+    ok: true,
+    deleted: summary.deleted,
+    total: summary.total,
+    cacheFailures: summary.cacheFailures,
+    failures: summary.failures
+  });
+}
+
+/** 按工作区整组删除归档会话；workspaceId 为 null 表示「未分组」。 */
+async function handleDeleteWorkspace(ctx, req, res) {
+  let payload;
+  try {
+    payload = JSON.parse((await readBody(req)) || "{}");
+  } catch {
+    sendJson(res, 200, { ok: false, code: "bad-json", message: "请求体不是合法 JSON" });
+    return;
+  }
+  // JSON 顶层可能是 null / 数组 / 标量；只接受普通对象，避免 hasOwnProperty 抛异常。
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+    sendJson(res, 200, { ok: false, code: "bad-request", message: "请求体必须是 JSON 对象" });
+    return;
+  }
+  if (!Object.prototype.hasOwnProperty.call(payload, "workspaceId")) {
+    sendJson(res, 200, { ok: false, code: "bad-request", message: "缺少 workspaceId（未分组请显式传 null）" });
+    return;
+  }
+  const workspaceId = payload.workspaceId;
+  if (workspaceId !== null && (typeof workspaceId !== "string" || workspaceId.length === 0)) {
+    sendJson(res, 200, { ok: false, code: "bad-request", message: "workspaceId 必须是非空字符串或 null" });
+    return;
+  }
+  const report = await readArchivedReport(ctx);
+  if (!report.ok) {
+    sendJson(res, responseStatus(report), { ok: false, code: report.code, message: report.message });
+    return;
+  }
+  // 只按权威报告过滤：客户端传的 workspaceId 仅作筛选条件，会话 id 一律取自报告。
+  const ids = report.sessions
+    .filter((session) => sameWorkspace(session.workspaceId, workspaceId))
+    .map((session) => session.sessionId);
+  const summary = await deleteSessionBatch(ctx, ids);
+  if (summary.unavailable) {
+    sendJson(res, 503, {
+      ok: false,
+      code: summary.firstFailure.code,
+      message: summary.firstFailure.message,
+      workspaceId,
+      deleted: 0,
+      total: summary.total,
+      cacheFailures: summary.cacheFailures,
+      failures: summary.failures
+    });
+    return;
+  }
+  sendJson(res, 200, {
+    ok: true,
+    workspaceId,
+    deleted: summary.deleted,
+    total: summary.total,
+    cacheFailures: summary.cacheFailures,
+    failures: summary.failures
+  });
 }
 
 // ---- 插件主体 ----
@@ -943,6 +1041,24 @@ function apply(ctx) {
         }
       }),
     "dsh-archive-manager: delete-all route"
+  );
+
+  ctx.effect(
+    () =>
+      ctx.webServer.register({
+        kind: "exact",
+        path: "/api/archive-manager/delete-workspace",
+        handler: async (req, res) => {
+          try {
+            await handleDeleteWorkspace(ctx, req, res);
+          } catch (error) {
+            ctx.logger.warn("dsh-archive-manager: delete-workspace route failed");
+            ctx.logger.warn(error);
+            sendJson(res, 500, { ok: false, code: "internal", message: "internal error" });
+          }
+        }
+      }),
+    "dsh-archive-manager: delete-workspace route"
   );
 }
 

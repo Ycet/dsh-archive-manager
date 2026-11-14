@@ -4,6 +4,7 @@
  * 只加载 bundle、喂一个最小的假 ctx，断言注册了哪些槽、id / order 是否与分区一致。
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 // bundle 只在首次 import 时向 window.__ModuleLoader__ 注册工厂。
@@ -26,6 +27,10 @@ async function loadClientBundle() {
     url.searchParams.set("test", String(Date.now()));
     await import(url.href);
     assert.ok(descriptor, "client bundle should register with ModuleLoader");
+    // 客户端模块加载器按包名查找工厂：注册 id 与 package.json 的 name
+    // 不一致时页面会报 "loaded without registering"，插件同步失败。
+    const { name: packageName } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+    assert.equal(descriptor.id, packageName, "客户端注册 id 必须等于 package.json 的 name");
     cachedFactory = descriptor.factory((name) => {
       if (name === "react") {
         return {

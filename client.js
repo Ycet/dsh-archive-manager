@@ -4,11 +4,13 @@
 // It registers a settings.section entry ("归档") and renders the archived
 // sessions page: grouped by workspace, filterable (all / one workspace),
 // sortable (name / created time), with per-session "取消归档" and "删除"
-// actions plus a top "删除全部" action — every delete guarded by a second
-// confirmation dialog. All mutations go through the same-origin routes
-// registered by the host half.
+// actions, a per-workspace group "删除本组" action, and a top "删除全部"
+// action — every delete guarded by a second confirmation dialog. All mutations
+// go through the same-origin routes registered by the host half.
 window.__ModuleLoader__.load({
-  id: "dsh-archive-manager",
+  // 注册 id 必须与 package.json 的 name 完全一致，否则客户端模块加载器
+  // 会报 "loaded without registering"，插件在页面上同步失败。
+  id: "dsh-archive-manager-ycet",
   factory: (require) => {
     var module = { exports: {} };
     var exports = module.exports;
@@ -55,6 +57,7 @@ window.__ModuleLoader__.load({
       sortCreatedAsc: "按创建时间 ↑",
       sortCreatedDesc: "按创建时间 ↓",
       deleteAll: "删除全部",
+      deleteGroup: "删除本组",
       unarchive: "取消归档",
       delete: "删除",
       unarchiving: "正在取消归档…",
@@ -66,6 +69,10 @@ window.__ModuleLoader__.load({
       confirmDeleteTitle: "确认删除会话？",
       confirmDeleteSingle: "将永久删除会话「{title}」及其全部聊天记录，此操作无法撤销。确定要删除吗？",
       confirmDeleteAll: "将永久删除全部 {n} 个已归档会话及其聊天记录，此操作无法撤销。确定要删除全部吗？",
+      confirmDeleteWorkspaceTitle: "确认删除该工作区的归档会话？",
+      confirmDeleteGroupTitle: "确认删除「未分组」的归档会话？",
+      confirmDeleteWorkspace: "将永久删除工作区「{workspace}」下的 {n} 个已归档会话及其聊天记录，此操作无法撤销。确定要删除吗？",
+      confirmDeleteUngrouped: "将永久删除「未分组」下的 {n} 个已归档会话及其聊天记录，此操作无法撤销。确定要删除吗？",
       confirmPrimary: "确认删除",
       cancel: "取消",
       ok: "确定",
@@ -76,6 +83,8 @@ window.__ModuleLoader__.load({
       deleteFail: "删除失败：{message}",
       deleteAllOk: "已删除 {n} 个会话",
       deleteAllPartial: "部分删除失败（{fail}/{total}）",
+      deleteWorkspaceOk: "已删除「{workspace}」下的 {n} 个会话",
+      deleteWorkspaceOkResidue: "已删除「{workspace}」下的 {n} 个会话（其中 {residue} 个的投影缓存残留，重启 DSH 可彻底清除）",
       noticeFile: "（清理记录成功，但日志文件删除失败）",
       noticeCacheResidue: "（投影缓存可能在下次检查点后被重建，重启 DSH 可彻底清除）",
       deleteAllOkResidue: "已删除 {n} 个会话（其中 {residue} 个的投影缓存残留，重启 DSH 可彻底清除）"
@@ -98,6 +107,7 @@ window.__ModuleLoader__.load({
       sortCreatedAsc: "Created ↑",
       sortCreatedDesc: "Created ↓",
       deleteAll: "Delete all",
+      deleteGroup: "Delete group",
       unarchive: "Unarchive",
       delete: "Delete",
       unarchiving: "Unarchiving…",
@@ -108,6 +118,10 @@ window.__ModuleLoader__.load({
       confirmDeleteTitle: "Delete session?",
       confirmDeleteSingle: "Permanently delete session “{title}” and all of its chat history? This cannot be undone.",
       confirmDeleteAll: "Permanently delete all {n} archived sessions and their chat history? This cannot be undone.",
+      confirmDeleteWorkspaceTitle: "Delete this workspace's archived sessions?",
+      confirmDeleteGroupTitle: "Delete the ungrouped archived sessions?",
+      confirmDeleteWorkspace: "Permanently delete the {n} archived session(s) in workspace “{workspace}” and their chat history? This cannot be undone.",
+      confirmDeleteUngrouped: "Permanently delete the {n} ungrouped archived session(s) and their chat history? This cannot be undone.",
       confirmPrimary: "Delete",
       cancel: "Cancel",
       ok: "OK",
@@ -117,6 +131,8 @@ window.__ModuleLoader__.load({
       deleteFail: "Delete failed: {message}",
       deleteAllOk: "Deleted {n} sessions",
       deleteAllPartial: "Some deletions failed ({fail}/{total})",
+      deleteWorkspaceOk: "Deleted {n} session(s) from “{workspace}”",
+      deleteWorkspaceOkResidue: "Deleted {n} session(s) from “{workspace}” ({residue} with projection-cache residue; restart DSH to clear it fully)",
       noticeFile: "(record cleaned, but log file removal failed)",
       noticeCacheResidue: "(projection cache may be rewritten by the next checkpoint; restart DSH to clear it fully)",
       deleteAllOkResidue: "Deleted {n} sessions ({residue} with projection-cache residue; restart DSH to clear it fully)"
@@ -280,8 +296,14 @@ window.__ModuleLoader__.load({
         display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: 6,
         background: "var(--dsw-alias-bg-module-platform, #f5f6f7)", color: "var(--dsw-alias-label-secondary, #61666b)", marginBottom: 4
       },
-      groupTitle: { fontWeight: 600, fontSize: 13 },
-      groupCount: { fontSize: 12, color: "var(--dsw-alias-label-tertiary)" },
+      groupTitle: { fontWeight: 600, fontSize: 13, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+      groupCount: { fontSize: 12, color: "var(--dsw-alias-label-tertiary)", flexShrink: 0 },
+      // 分组头部右侧的整组删除按钮：比行内 dangerButton 更紧凑，靠 marginLeft:auto 右对齐。
+      groupDeleteButton: {
+        marginLeft: "auto", flexShrink: 0, fontSize: 12, padding: "2px 8px", borderRadius: 6, cursor: "pointer",
+        border: "1px solid var(--dsw-alias-state-error-primary, #d93025)",
+        color: "var(--dsw-alias-state-error-primary, #d93025)", background: "transparent"
+      },
       row: {
         display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 6,
         borderBottom: "1px solid var(--dsw-alias-border-l1, #0000000a)"
@@ -350,7 +372,7 @@ window.__ModuleLoader__.load({
         workspaces: [],
         filter: "",
         sort: "nameAsc",
-        confirm: null, // { kind: 'single'|'all', sessionId?, title? }
+        confirm: null, // { kind:'single'|'all'|'workspace', sessionId?, title?, workspaceId?, count?, sessionIds? }
         busy: false,
         notice: null
       });
@@ -463,6 +485,26 @@ window.__ModuleLoader__.load({
           return t("deleteAllPartial", { fail: res.failures ? res.failures.length : 0, total: res.total });
         });
       };
+      // 按工作区整组删除：请求只带 workspaceId（未分组为 null），目标会话由
+      // 服务端从权威归档报告重新过滤；这里的 sessionIds 仅用于删除后清理浏览器
+      // 分会话状态（快照取自点击确认时的当前组）。
+      const onDeleteWorkspace = (target) => {
+        runAction(
+          () => postJson("/api/archive-manager/delete-workspace", { workspaceId: target.workspaceId }),
+          async (res) => {
+            for (const sid of target.sessionIds) purgeSessionLocalStorage(sid);
+            if (refreshSessions !== null) await refreshSessions();
+            const label = target.workspaceId === null ? t("filterUngrouped") : target.title;
+            const residue = typeof res.cacheFailures === "number" ? res.cacheFailures : 0;
+            if (res.deleted === res.total) {
+              return residue > 0
+                ? t("deleteWorkspaceOkResidue", { workspace: label, n: res.deleted, residue })
+                : t("deleteWorkspaceOk", { workspace: label, n: res.deleted });
+            }
+            return t("deleteAllPartial", { fail: res.failures ? res.failures.length : 0, total: res.total });
+          }
+        );
+      };
 
       const closeConfirm = () => set({ confirm: null });
 
@@ -493,17 +535,28 @@ window.__ModuleLoader__.load({
 
       const confirmNode = state.confirm
         ? React.createElement(ConfirmDialog, {
-            title: t("confirmDeleteTitle"),
+            title:
+              state.confirm.kind === "workspace"
+                ? state.confirm.workspaceId === null
+                  ? t("confirmDeleteGroupTitle")
+                  : t("confirmDeleteWorkspaceTitle")
+                : t("confirmDeleteTitle"),
             body:
               state.confirm.kind === "all"
                 ? t("confirmDeleteAll", { n: state.sessions.length })
-                : t("confirmDeleteSingle", { title: state.confirm.title || state.confirm.sessionId }),
+                : state.confirm.kind === "workspace"
+                  ? state.confirm.workspaceId === null
+                    ? t("confirmDeleteUngrouped", { n: state.confirm.count })
+                    : t("confirmDeleteWorkspace", { workspace: state.confirm.title, n: state.confirm.count })
+                  : t("confirmDeleteSingle", { title: state.confirm.title || state.confirm.sessionId }),
             busy: state.busy,
             t,
             onCancel: closeConfirm,
             onConfirm: () => {
               if (state.confirm.kind === "all") {
                 onDeleteAll();
+              } else if (state.confirm.kind === "workspace") {
+                onDeleteWorkspace(state.confirm);
               } else {
                 onDelete(state.confirm.sessionId, state.confirm.title);
               }
@@ -534,10 +587,10 @@ window.__ModuleLoader__.load({
       for (const wsId of state.workspaces) {
         const items = byWs.get(wsId.id) || [];
         if (items.length === 0) continue;
-        groups.push({ key: wsId.id, title: wsTitle(wsId.id), items });
+        groups.push({ key: wsId.id, workspaceId: wsId.id, title: wsTitle(wsId.id), items });
       }
       if (ungrouped.length > 0) {
-        groups.push({ key: "__ungrouped__", title: t("groupUngrouped"), items: ungrouped });
+        groups.push({ key: "__ungrouped__", workspaceId: null, title: t("groupUngrouped"), items: ungrouped });
       }
 
       const rows = (items) =>
@@ -601,10 +654,12 @@ window.__ModuleLoader__.load({
             )
           ),
           React.createElement("div", { style: styles.buttonsRow },
-            React.createElement("span", { style: styles.count }, t("archiveCount", { n: sorted.length })),
+            // 计数与「删除全部」都按全部归档会话统计，不受筛选影响；避免出现
+            // 「显示筛选后的 N 个、实际删掉全部」的误解。
+            React.createElement("span", { style: styles.count }, t("archiveCount", { n: state.sessions.length })),
             React.createElement("button", {
-              style: state.busy || sorted.length === 0 ? { ...styles.dangerButton, ...styles.defaultButtonDisabled } : styles.dangerButton,
-              disabled: state.busy || sorted.length === 0,
+              style: state.busy || state.sessions.length === 0 ? { ...styles.dangerButton, ...styles.defaultButtonDisabled } : styles.dangerButton,
+              disabled: state.busy || state.sessions.length === 0,
               onClick: () => set({ confirm: { kind: "all" } })
             }, t("deleteAll"))
           )
@@ -619,7 +674,23 @@ window.__ModuleLoader__.load({
                 React.createElement("div", { key: g.key, style: styles.group },
                   React.createElement("div", { style: styles.groupHeader },
                     React.createElement("span", { style: styles.groupTitle }, g.title),
-                    React.createElement("span", { style: styles.groupCount }, `(${g.items.length})`)
+                    React.createElement("span", { style: styles.groupCount }, `(${g.items.length})`),
+                    React.createElement("button", {
+                      style: state.busy ? { ...styles.groupDeleteButton, ...styles.defaultButtonDisabled } : styles.groupDeleteButton,
+                      disabled: state.busy,
+                      title: t("deleteGroup"),
+                      "aria-label": `${t("deleteGroup")}：${g.title}`,
+                      onClick: () => set({
+                        confirm: {
+                          kind: "workspace",
+                          workspaceId: g.workspaceId,
+                          title: g.title,
+                          count: g.items.length,
+                          // 删除成功后逐个清理这些会话的浏览器分会话状态。
+                          sessionIds: g.items.map((s) => s.sessionId)
+                        }
+                      })
+                    }, t("deleteGroup"))
                   ),
                   rows(g.items)
                 )

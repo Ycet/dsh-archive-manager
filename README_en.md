@@ -8,7 +8,7 @@
 A DeepSeek Harness (DSH) web-GUI plugin: adds an "Archive" page to the settings window for viewing, filtering, sorting, unarchiving and permanently deleting archived DSH sessions.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg?style=for-the-badge)](package.json)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg?style=for-the-badge)](package.json)
 [![DSH](https://img.shields.io/badge/DSH-0.1.0--rc.6%2B-purple.svg?style=for-the-badge)](https://github.com/deepseek-ai/deepseek-harness)
 
 </div>
@@ -30,6 +30,8 @@ A DeepSeek Harness (DSH) web-GUI plugin: adds an "Archive" page to the settings 
 ---
 
 > [!NOTE]
+> `0.4.0` adds **one-click deletion per workspace**: every workspace group header now has a "Delete group" button that permanently deletes only that group's archived sessions after a second confirmation, and the "Ungrouped" group works the same way. The toolbar "Delete all" still deletes everything, but its count now reflects all archived sessions instead of the filtered subset. This release also fixes the client registration id that was left at the old package name after the rename to `dsh-archive-manager-ycet`, which made the page report a plugin sync failure.
+>
 > `0.3.0` makes "Delete" actually clean up: besides the log directory, it now removes the session's **projection cache** (through the official `storageDomain` domain API, invalidating both disk and memory) and its **browser-side per-session state** (sidebar layout, composer draft, follow-up-question draft, sidebar-browser state, plus the "last opened session" pointer when it names the deleted session). A failed derived-data cleanup never blocks the main flow — it is only mentioned in the success notice.
 >
 > `0.2.1` fixed compatibility with DSH 0.2.2-rc.1: the settings nav icon now uses the official `settings.section.icon` slot (registered id must equal the section id `archives`), with the DOM hook kept as a fallback for older shells; the two paths are mutually exclusive via the `data-dsh-archive-injected` marker on the svg. It also added `engines.dsh: >=0.2.1-rc.2` so DSH's plugin compatibility gate applies to this package.
@@ -50,7 +52,8 @@ A DeepSeek Harness (DSH) web-GUI plugin: adds an "Archive" page to the settings 
 | **Filter** | Filter archived sessions by "All workspaces", a specific workspace, or "Ungrouped"; the dropdown only lists workspaces that **own at least one archived session**, and the "Ungrouped" option only appears when ungrouped archived sessions exist |
 | **Sort** | Sort by session name (alphabetical asc/desc) or by session creation time (asc/desc) |
 | **Unarchive** | Removes a session from the archive set; it **reappears in the corresponding workspace group in the left sidebar** and can be opened |
-| **Delete (with confirmation)** | Delete a single session, or "Delete all" at once; every delete is guarded by a second confirmation dialog — it only runs after clicking "Confirm delete" |
+| **Delete (with confirmation)** | Delete a single session, delete every archived session of one workspace, or "Delete all" at once; every delete is guarded by a second confirmation dialog — it only runs after clicking "Confirm delete" |
+| **Delete per workspace** | Each workspace group header has a "Delete group" button that deletes only that group's archived sessions; the "Ungrouped" group is supported too. The dialog names the workspace and session count, and sessions are deleted one by one with an aggregated result |
 | **Permanent deletion** | Deletion removes the session log file (`session.jsonl.zstd`), the archive marker and the workspace bookkeeping — irreversible |
 | **Bilingual UI** | UI text follows DSH's active language (中文 / English) |
 
@@ -72,10 +75,10 @@ dsh plugin --profile web add dsh-archive-manager-ycet
 dsh plugin --profile web add dsh-archive-manager-ycet@link:<absolute-path-to-plugin>
 
 # Option 3: install from GitHub (pinned to a release tag; requires git)
-dsh plugin --profile web add "github:Ycet/dsh-archive-manager#v0.3.0"
+dsh plugin --profile web add "github:Ycet/dsh-archive-manager#v0.4.0"
 
 # Option 4: install from a Release asset (tarball; no git, no npm account)
-dsh plugin --profile web add "https://github.com/Ycet/dsh-archive-manager/releases/download/v0.3.0/dsh-archive-manager-0.3.0.tgz"
+dsh plugin --profile web add "https://github.com/Ycet/dsh-archive-manager/releases/download/v0.4.0/dsh-archive-manager-ycet-0.4.0.tgz"
 ```
 
 The package declares a `dsh.bundle` patch layer; `dsh plugin` merges the loader entry into the profile's bundle layer automatically — no manual editing of `cordis.patch.yml` required. Options 2–4 need no npm account; for the desktop app replace `--profile web` with `--profile desktop` (using the desktop-bundled CLI).
@@ -101,8 +104,9 @@ The package declares a `dsh.bundle` patch layer; `dsh plugin` merges the loader 
 3. Toolbar at the top of the page:
    - **Filter** dropdown: default "All workspaces"; pick a specific workspace or "Ungrouped" to narrow down; the dropdown only lists workspaces that **own at least one archived session** (a workspace with no archived sessions does not appear), and the "Ungrouped" option only appears when ungrouped archived sessions exist;
    - **Sort** dropdown: by name or creation time, ascending or descending;
-   - **Delete all** button: deletes every archived session under the current filter (with confirmation);
+   - **Delete all** button: deletes **all** archived sessions (regardless of the filter, with confirmation);
 4. Sessions are grouped by workspace, each group showing session titles and creation times:
+   - **Delete group** (right side of the group header): after a second confirmation, deletes only that group's archived sessions; the dialog shows the workspace name and session count;
    - **Unarchive**: the session returns to its workspace group in the left sidebar and can be reopened;
    - **Delete**: permanently deletes the session after a second confirmation.
 
@@ -152,6 +156,7 @@ flowchart LR
         R -->|"/api/archive-manager/unarchive"| H2["Remove from archivedSessionIds"]
         R -->|"/api/archive-manager/delete"| H3["Remove archive marker + bookkeeping, delete log dir"]
         R -->|"/api/archive-manager/delete-all"| H4["Delete all archived sessions one by one"]
+        R -->|"/api/archive-manager/delete-workspace"| H5["Filter by workspaceId, then delete one by one"]
     end
 
     H1 --> WS["storageDomain.get('workspace')"]
@@ -161,6 +166,7 @@ flowchart LR
     H3 --> FL["await sessionPersistence.flush durability barrier"]
     FL --> FS["fs.rm delete session log dir"]
     H4 --> H3
+    H5 --> H4
 ```
 
 After the host writes the `workspace` domain global, DSH validates the domain state on startup (fail-loud). Writes keep the `workspace.json` schema structure strictly unchanged (arrays are replaced wholesale before writing back), so DSH startup is never broken.
@@ -181,7 +187,7 @@ After the host writes the `workspace` domain global, DSH validates the domain st
   - Caveat: when the frontend receives `api-session/removed` for a row whose `origin === "subagent"` (or whose id is address-retained), DSH downgrades row removal to a `running: false` flip and keeps the row; for such sessions judge by the result after a hard refresh.
 
 > [!WARNING]
-> "Delete" and "Delete all" are **permanent deletions**: the session log file, archive marker and workspace bookkeeping are all removed — **irreversible**.
+> "Delete", "Delete group" and "Delete all" are **permanent deletions**: the session log file, archive marker and workspace bookkeeping are all removed — **irreversible**.
 
 ### Deletion scope
 
@@ -207,7 +213,7 @@ DSH itself offers no session deletion or retention capability (see "No deletion 
 | `storages/session_projcache.json` | The pre-per-record whole-unit format; the new backend no longer reads it, and editing it by hand could interfere with its `backup-and-skip` recovery policy. |
 | Session search index | The active profile configures `sessionQuery` with `path: ':memory:'` (`openAt: first-search`), so the index lives only in memory, disappears when the process exits, and leaves no index files on disk to clean. |
 
-**Failure semantics**: a failed log deletion fails the whole operation and leaves archive state untouched; a failed projection-cache or localStorage cleanup is only logged and mentioned in the success notice, and **does not roll back** the completed deletion. During "Delete all" each session is judged independently: derived-data residue counts toward `cacheFailures` and never changes the `deleted` count.
+**Failure semantics**: a failed log deletion fails the whole operation and leaves archive state untouched; a failed projection-cache or localStorage cleanup is only logged and mentioned in the success notice, and **does not roll back** the completed deletion. During "Delete all" or "Delete group" each session is judged independently: derived-data residue counts toward `cacheFailures` and never changes the `deleted` count. "Delete group" filters the server's authoritative archived report by `workspaceId`; the client only sends the workspace id.
 
 > [!NOTE]
 > The projection cache has a known race: on `session/disposed` DSH persists a checkpoint fire-and-forget (`void flushSoft(...)`, no `await`), and the plugin's existing `persistence.flush()` only drains log writes, not this one. If that write lands after our deletion, `<id>.json` can reappear. The plugin answers with "re-verify after delete + up to 3 retries at 150 ms", and reports honestly when residue remains — restarting DSH clears it completely.
@@ -216,7 +222,7 @@ DSH itself offers no session deletion or retention capability (see "No deletion 
 
 ## ⚙️ Configuration
 
-This plugin needs no environment variables or config files — it works out of the box. It adds no public DSH RPC and mounts no new Service; it only registers 4 package-local same-origin HTTP routes:
+This plugin needs no environment variables or config files — it works out of the box. It adds no public DSH RPC and mounts no new Service; it only registers 5 package-local same-origin HTTP routes:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -224,6 +230,7 @@ This plugin needs no environment variables or config files — it works out of t
 | `POST` | `/api/archive-manager/unarchive` | Unarchive a single session |
 | `POST` | `/api/archive-manager/delete` | Permanently delete a single archived session |
 | `POST` | `/api/archive-manager/delete-all` | Permanently delete all archived sessions |
+| `POST` | `/api/archive-manager/delete-workspace` | Permanently delete the archived sessions of one workspace (`workspaceId`, or `null` for ungrouped) |
 
 ---
 

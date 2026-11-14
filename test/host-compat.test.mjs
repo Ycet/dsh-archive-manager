@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import test from "node:test";
-import { apply, deleteSession, inject, purgeProjectionCache, readArchivedReport } from "../index.js";
+import { apply, deleteSession, inject, name, purgeProjectionCache, readArchivedReport } from "../index.js";
 
 // Optional integration against the installed DSH backend, not a hand-written list mock.
 for (const compression of ["none", "zstd"]) for (const noCwd of [false, true]) test(`real DSH ${compression} snapshots delete ungrouped artifacts (noCwd=${noCwd})`, {
@@ -122,12 +122,25 @@ test("snapshot deletion verifies backend absence before clearing archive records
  * DSH 未挂载该域，插件应当跳过缓存清理而不报错。传入一个 `Map` 即视为已挂载：
  * 记录存在其中，`delete` 移除它，`get` 读它。传入 `{ table: ... }` 形式可自定义
  * 表行为（例如模拟「删了又被异步写回」）。
+ *
+ * `workspaces` 用于多工作区 / 未分组场景：缺省仍是单个 `workspace-1`（SessionIds
+ * 等于 archived），传入数组后按 `{ id, title, sessionIds }` 建立记账；未列在任何
+ * 工作区里的归档会话即「未分组」。
  */
-function makeHost({ archived = ["session-1"], includeRegistry = false, services = {}, workspacePath = "/tmp/project", projectionCache = undefined } = {}) {
+function makeHost({ archived = ["session-1"], includeRegistry = false, services = {}, workspacePath = "/tmp/project", projectionCache = undefined, workspaces = undefined } = {}) {
   let globalState = { archivedSessionIds: archived.slice() };
-  const workspaceRecords = new Map([
-    ["workspace-1", { title: "Workspace", path: workspacePath, sessionIds: archived.slice() }]
-  ]);
+  const workspaceRecords = new Map(
+    workspaces === undefined
+      ? [["workspace-1", { title: "Workspace", path: workspacePath, sessionIds: archived.slice() }]]
+      : workspaces.map((ws) => [
+          ws.id,
+          {
+            title: ws.title ?? ws.id,
+            path: ws.path ?? workspacePath,
+            sessionIds: Array.isArray(ws.sessionIds) ? ws.sessionIds.slice() : []
+          }
+        ])
+  );
   const table = {
     entries: () => workspaceRecords.entries(),
     async update(id, update) {
@@ -209,7 +222,7 @@ function makeHost({ archived = ["session-1"], includeRegistry = false, services 
     routes,
     globalState: () => structuredClone(globalState),
     registryState: () => structuredClone(registry.state),
-    workspaceRecord: () => structuredClone(workspaceRecords.get("workspace-1"))
+    workspaceRecord: (id = "workspace-1") => structuredClone(workspaceRecords.get(id))
   };
 }
 
@@ -894,6 +907,140 @@ test("delete-all counts cache residue separately from hard failures", async (t) 
   assert.deepEqual(host.globalState().archivedSessionIds, []);
 });
 
+// ---- 按工作区整组删除 ----
+
+test("delete-workspace only removes the requested workspace's archived sessions", async () => {
+  const host = makeHost({
+    archived: ["session-a1", "session-a2", "session-b1", "session-u1"],
+    includeRegistry: true,
+    workspaces: [
+      { id: "workspace-a", title: "Alpha", sessionIds: ["session-a1", "session-a2"] },
+      { id: "workspace-b", title: "Beta", sessionIds: ["session-b1"] }
+    ],
+    services: { sessions: { get: () => undefined } }
+  });
+
+  const response = await invoke(host, "/api/archive-manager/delete-workspace", { workspaceId: "workspace-a" });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.workspaceId, "workspace-a");
+  assert.equal(response.body.deleted, 2);
+  assert.equal(response.body.total, 2);
+  assert.deepEqual(response.body.failures, []);
+  assert.deepEqual(host.globalState().archivedSessionIds, ["session-b1", "session-u1"]);
+  assert.deepEqual(host.workspaceRecord("workspace-a").sessionIds, []);
+  assert.deepEqual(host.workspaceRecord("workspace-b").sessionIds, ["session-b1"]);
+});
+
+test("delete-workspace with workspaceId null removes only ungrouped sessions", async () => {
+  const host = makeHost({
+    archived: ["session-a1", "session-u1", "session-u2"],
+    includeRegistry: true,
+    workspaces: [{ id: "workspace-a", title: "Alpha", sessionIds: ["session-a1"] }],
+    services: { sessions: { get: () => undefined } }
+  });
+
+  const response = await invoke(host, "/api/archive-manager/delete-workspace", { workspaceId: null });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.deleted, 2);
+  assert.deepEqual(host.globalState().archivedSessionIds, ["session-a1"]);
+  assert.deepEqual(host.workspaceRecord("workspace-a").sessionIds, ["session-a1"]);
+});
+
+test("delete-workspace rejects a missing or invalid workspaceId without deleting", async () => {
+  const host = makeHost({
+    archived: ["session-a1"],
+    includeRegistry: true,
+    workspaces: [{ id: "workspace-a", title: "Alpha", sessionIds: ["session-a1"] }],
+    services: { sessions: { get: () => undefined } }
+  });
+
+  const missing = await invoke(host, "/api/archive-manager/delete-workspace", {});
+  const invalid = await invoke(host, "/api/archive-manager/delete-workspace", { workspaceId: 42 });
+
+  assert.equal(missing.body.ok, false);
+  assert.equal(missing.body.code, "bad-request");
+  assert.equal(invalid.body.ok, false);
+  assert.equal(invalid.body.code, "bad-request");
+  assert.deepEqual(host.globalState().archivedSessionIds, ["session-a1"]);
+  assert.deepEqual(host.workspaceRecord("workspace-a").sessionIds, ["session-a1"]);
+});
+
+test("delete-workspace with an unknown workspace is an idempotent no-op", async () => {
+  const host = makeHost({
+    archived: ["session-a1"],
+    includeRegistry: true,
+    workspaces: [{ id: "workspace-a", title: "Alpha", sessionIds: ["session-a1"] }],
+    services: { sessions: { get: () => undefined } }
+  });
+
+  const response = await invoke(host, "/api/archive-manager/delete-workspace", { workspaceId: "workspace-missing" });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.deleted, 0);
+  assert.equal(response.body.total, 0);
+  assert.deepEqual(host.globalState().archivedSessionIds, ["session-a1"]);
+});
+
+test("delete-workspace reports 503 when destructive session checks are unavailable", async () => {
+  const host = makeHost({
+    archived: ["session-a1"],
+    includeRegistry: true,
+    workspaces: [{ id: "workspace-a", title: "Alpha", sessionIds: ["session-a1"] }]
+  });
+
+  const response = await invoke(host, "/api/archive-manager/delete-workspace", { workspaceId: "workspace-a" });
+
+  assert.equal(response.status, 503);
+  assert.equal(response.body.ok, false);
+  assert.equal(response.body.code, "sessions-unavailable");
+  assert.equal(response.body.deleted, 0);
+  assert.deepEqual(host.globalState().archivedSessionIds, ["session-a1"]);
+});
+
+test("delete-workspace counts cache residue separately from hard failures", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "archive-workspace-cache-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const ids = ["session-a1", "session-a2"];
+  const dirs = new Map();
+  for (const id of ids) {
+    const dir = join(root, id);
+    mkdirSync(dir, { recursive: true });
+    dirs.set(id, dir);
+  }
+  // 两个会话的缓存都无法删除：主流程全部成功，但 cacheFailures 应为 2。
+  const host = makeHost({
+    archived: ids,
+    includeRegistry: true,
+    workspaces: [{ id: "workspace-a", title: "Alpha", sessionIds: ids }],
+    projectionCache: { table: {
+      get: () => ({ identity: {}, rows: {} }),
+      async delete() { return true; }
+    } },
+    services: {
+      sessions: { get: () => undefined },
+      sessionPersistence: {
+        list: async () => ids.map((id) => ({ header: { id, cwd: root }, revision: "r1" })),
+        locate: (header) => ({ path: join(dirs.get(header.id), "session.v4.jsonl.zstd") }),
+        stat: async () => undefined
+      }
+    }
+  });
+
+  const response = await invoke(host, "/api/archive-manager/delete-workspace", { workspaceId: "workspace-a" });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.deleted, 2);
+  assert.equal(response.body.cacheFailures, 2);
+  assert.deepEqual(response.body.failures, []);
+  assert.deepEqual(host.globalState().archivedSessionIds, []);
+});
+
 // 与已安装的 DSH 真实存储栈联调（需要 DSH_TEST_INSTALL_ROOT）。
 test("real DSH storageDomain drops a session_projcache record", {
   skip: !process.env.DSH_TEST_INSTALL_ROOT
@@ -948,4 +1095,11 @@ test("real DSH storageDomain drops a session_projcache record", {
   assert.equal(table.get("session-1"), undefined, "删除后内存态必须同步失效");
   assert.equal(table.size, 0, "该会话的记录已从域表移除");
   await domain.close();
+});
+
+// 包名是安装、补丁层与客户端模块加载器共用的唯一标识；改名后必须同步
+// package.json、cordis.patch.yml、index.js 的 name 与 client.js 的注册 id。
+test("宿主 name 与 package.json 的 name 一致", () => {
+  const { name: packageName } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(name, packageName);
 });
