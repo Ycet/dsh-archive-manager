@@ -66,10 +66,10 @@ A DeepSeek Harness (DSH) web-GUI plugin: adds an "Archive" page to the settings 
 
 ```sh
 # Option 1: install from npm (published package)
-dsh plugin --profile web add @ycet/dsh-archive-manager
+dsh plugin --profile web add dsh-archive-manager-ycet
 
 # Option 2: install from a local source directory (development)
-dsh plugin --profile web add @ycet/dsh-archive-manager@link:<absolute-path-to-plugin>
+dsh plugin --profile web add dsh-archive-manager-ycet@link:<absolute-path-to-plugin>
 
 # Option 3: install from GitHub (pinned to a release tag; requires git)
 dsh plugin --profile web add "github:Ycet/dsh-archive-manager#v0.3.0"
@@ -81,7 +81,7 @@ dsh plugin --profile web add "https://github.com/Ycet/dsh-archive-manager/releas
 The package declares a `dsh.bundle` patch layer; `dsh plugin` merges the loader entry into the profile's bundle layer automatically — no manual editing of `cordis.patch.yml` required. Options 2–4 need no npm account; for the desktop app replace `--profile web` with `--profile desktop` (using the desktop-bundled CLI).
 
 > [!NOTE]
-> The unscoped `dsh-archive-manager` on npm belongs to **a different author** (`jasonrale`, version 1.1.1) and is unrelated to this project. This project publishes as `@ycet/dsh-archive-manager`.
+> The unscoped `dsh-archive-manager` on npm belongs to **a different author** (`jasonrale`, version 1.1.1) and is unrelated to this project. This project publishes as `dsh-archive-manager-ycet`.
 
 ### Launch
 

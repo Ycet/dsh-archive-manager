@@ -66,10 +66,10 @@ DeepSeek Harness（DSH）Web 界面插件：在设置窗口新增「归档」页
 
 ```sh
 # 方式一：从 npm 安装（发布包）
-dsh plugin --profile web add @ycet/dsh-archive-manager
+dsh plugin --profile web add dsh-archive-manager-ycet
 
 # 方式二：从本地源码安装（开发）
-dsh plugin --profile web add @ycet/dsh-archive-manager@link:<absolute-path-to-plugin>
+dsh plugin --profile web add dsh-archive-manager-ycet@link:<absolute-path-to-plugin>
 
 # 方式三：从 GitHub 安装（锁定版本 tag，需本机有 git）
 dsh plugin --profile web add "github:Ycet/dsh-archive-manager#v0.3.0"
@@ -81,7 +81,7 @@ dsh plugin --profile web add "https://github.com/Ycet/dsh-archive-manager/releas
 包声明了 `dsh.bundle` 补丁层，`dsh plugin` 会自动把加载项合入 profile 的 bundle 层，无需手动编辑 `cordis.patch.yml`。方式二、三、四均无需 npm 账号；桌面端把 `--profile web` 换成 `--profile desktop`（使用桌面端自带 CLI）。
 
 > [!NOTE]
-> npm 上无作用域的 `dsh-archive-manager` 是**另一位作者的包**（`jasonrale`，版本 1.1.1），与本项目无关。本项目发布为 `@ycet/dsh-archive-manager`。
+> npm 上无作用域的 `dsh-archive-manager` 是**另一位作者的包**（`jasonrale`，版本 1.1.1），与本项目无关。本项目发布为 `dsh-archive-manager-ycet`。
 
 ### 启动
 

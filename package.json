@@ -1,8 +1,7 @@
 {
-  "name": "@ycet/dsh-archive-manager",
+  "name": "dsh-archive-manager-ycet",
   "version": "0.3.0",
   "publishConfig": {
-    "access": "public",
     "registry": "https://registry.npmjs.org/"
   },
   "repository": {

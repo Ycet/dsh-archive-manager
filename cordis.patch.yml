@@ -1,8 +1,9 @@
 # dsh-archive-manager — 设置页「归档」插件（查看/筛选/排序/取消归档/删除归档会话）。
 # 声明 dsh.bundle 补丁层：`dsh plugin --profile web add <pkg>` 安装时自动合入
 # profile 的 bundle 层，无需手动编辑 cordis.patch.yml。
-# 注意：name 必须等于 package.json 的 name（npm 上 dsh-archive-manager 已被他人
-# 占用，故发布为 @ycet 作用域包；行 id 保持 archive-manager 不变）。
+# 注意：name 必须等于 package.json 的 name。npm 上无作用域的 dsh-archive-manager
+# 已被其他作者占用（jasonrale，1.1.1），故发布名为 dsh-archive-manager-ycet；
+# 行 id 保持 archive-manager 不变。
 - insert:
     - id: archive-manager
-      name: '@ycet/dsh-archive-manager'
+      name: dsh-archive-manager-ycet
