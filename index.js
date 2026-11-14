@@ -484,6 +484,118 @@ async function syncArchivedState(ctx, dom, nextArchived, sessionId) {
   return { ok: true };
 }
 
+// ---- 派生数据清理（投影缓存） ----
+
+/** 等待若干毫秒；用于删除后的有界重试，避免定时器长期挂起。 */
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+/**
+ * 删除一个会话的投影缓存记录。
+ *
+ * 走 `storageDomain` 的域 API 而不是直接 rm 文件：`KvTable.delete` 会把删除排进
+ * 该域的写链，持久化后同步更新内存表并发出 `domain/changed`，因此磁盘文档与内存
+ * 态一起失效。直接删文件会留下内存残影——列表仍能读到已删会话的缓存值，下次写入
+ * 还会把文件重建回来。DSH 官方 README 也把该域声明为「无驱逐/保留面，清理属带外
+ * 维护」，所以域 API 是唯一干净通道。
+ *
+ * 关键竞态：`session/disposed` 时投影缓存用 `void flushSoft(...)` 落盘（fire-and-
+ * forget，没有 await）。插件现有的 `persistence.flush()` 只排空日志写入，排不空它。
+ * 若那次写回晚于本次删除落地，`<id>.json` 会被重新创建，且记录里的
+ * formatVersion/createdAt/cwd 与被删会话完全一致，读侧的身份校验不会丢弃它。因此
+ * 删除后必须复核，并在复核仍存在时做有界重试。
+ *
+ * 旧版 DSH 可能没有挂载该域或结构不同：逐级跳过并如实标注，绝不抛错——派生数据
+ * 清理失败不能反过来阻断日志删除。
+ *
+ * @param ctx DSH 插件上下文。
+ * @param sessionId 目标会话 id。
+ * @param options.attempts 删后复核的最大尝试次数。
+ * @param options.intervalMs 两次尝试之间的等待毫秒数。
+ * @returns `{ ok, deleted?, skipped?, code?, message? }`；`ok:false` 表示派生数据残留。
+ */
+async function purgeProjectionCache(ctx, sessionId, { attempts = 3, intervalMs = 150 } = {}) {
+  const storageDomain = ctx.get("storageDomain");
+  if (!storageDomain || typeof storageDomain.get !== "function") {
+    return { ok: true, skipped: "domain-unavailable" };
+  }
+  let domain;
+  try {
+    domain = storageDomain.get("session_projcache");
+  } catch {
+    return { ok: true, skipped: "domain-unavailable" };
+  }
+  if (domain === undefined || domain === null) {
+    return { ok: true, skipped: "domain-not-open" };
+  }
+  if (typeof domain.table !== "function") {
+    return { ok: true, skipped: "table-incompatible" };
+  }
+  let table;
+  try {
+    table = await domain.table("sessions");
+  } catch {
+    return { ok: true, skipped: "table-incompatible" };
+  }
+  if (!table || typeof table.delete !== "function" || typeof table.get !== "function") {
+    return { ok: true, skipped: "table-incompatible" };
+  }
+
+  const rounds = Number.isSafeInteger(attempts) && attempts > 0 ? attempts : 1;
+  const wait = Number.isSafeInteger(intervalMs) && intervalMs > 0 ? intervalMs : 0;
+  let deleted = false;
+  let lastDeleteError = null;
+  let lastCheckError = null;
+
+  for (let round = 0; round < rounds; round++) {
+    if (round > 0 && wait > 0) await sleep(wait);
+    lastDeleteError = null;
+    try {
+      // delete 在域写链的槽位上判断存在性：先入队的 put 会被本次删除看见。
+      if (await table.delete(sessionId) === true) deleted = true;
+    } catch (error) {
+      lastDeleteError = error;
+    }
+    lastCheckError = null;
+    let present;
+    try {
+      present = table.get(sessionId) !== undefined;
+    } catch (error) {
+      lastCheckError = error;
+      continue;
+    }
+    // 内存态同步失效即可判定成功：域保证先持久化再更新内存，所以这里看不到
+    // 记录时，磁盘文档也已被移出可读集。
+    if (!present) return { ok: true, deleted };
+  }
+
+  if (lastCheckError !== null) {
+    return {
+      ok: false,
+      code: "cache-delete-failed",
+      deleted,
+      message: `复核投影缓存删除结果失败（已尝试 ${rounds} 次）: ${String(lastCheckError)}`
+    };
+  }
+  if (lastDeleteError !== null) {
+    return {
+      ok: false,
+      code: "cache-delete-failed",
+      deleted,
+      message: `删除投影缓存失败（已尝试 ${rounds} 次）: ${String(lastDeleteError)}`
+    };
+  }
+  return {
+    ok: false,
+    code: "cache-reappeared",
+    deleted,
+    message: `投影缓存删除后仍存在（已尝试 ${rounds} 次），可能被 DSH 的异步检查点写回`
+  };
+}
+
 /** 彻底删除一个归档会话：先删除日志文件（并确认成功），再移除归档与记账。 */
 async function deleteSession(ctx, sessionId, fileOps = { rm, stat }) {
   const dom = workspaceDomain(ctx);
@@ -627,13 +739,23 @@ async function deleteSession(ctx, sessionId, fileOps = { rm, stat }) {
     }
   }
 
-  // 3) 文件已确认删除（或本就不存在）后，移除归档集合 + workspace 记账。
+  // 3) 文件已确认删除（或本就不存在）后，清理该会话的派生数据。
+  //    顺序在日志之后：日志是权威数据，派生数据清理失败不能让会话「看起来删掉了
+  //    但日志还在」；反过来日志已删时缓存残留只是冗余，不影响正确性。
+  //    失败不阻断主流程，只如实上报，由前端在成功提示里附带说明。
+  const cache = await purgeProjectionCache(ctx, sessionId).catch((error) => ({
+    ok: false,
+    code: "cache-delete-failed",
+    message: `清理投影缓存时发生异常: ${String(error)}`
+  }));
+
+  // 4) 移除归档集合 + workspace 记账。
   const removed = await writeRemove(ctx, sessionId);
   if (!removed.ok) {
     return { ok: false, code: removed.code, message: `记录清理失败: ${removed.message}` };
   }
 
-  return { ok: true, fileDeleted: true, deletedDir, triedDir };
+  return { ok: true, fileDeleted: true, deletedDir, triedDir, cache };
 }
 
 // ---- 路由处理器 ----
@@ -723,22 +845,29 @@ async function handleDeleteAll(ctx, res) {
   }
   const ids = report.archivedSessionIds.slice();
   const failures = [];
+  // 主流程（日志 + 归档记录）失败与会话成功但派生数据残留分开统计：
+  // 前者影响 deleted/total，后者只在 cacheFailures 里体现，不改变成功语义。
+  let cacheFailures = 0;
   let okCount = 0;
   for (const sid of ids) {
     try {
       const r = await deleteSession(ctx, sid);
-      if (r.ok) okCount += 1;
-      else failures.push({ sessionId: sid, code: r.code, message: r.message });
+      if (r.ok) {
+        okCount += 1;
+        if (r.cache && r.cache.ok === false) cacheFailures += 1;
+      } else {
+        failures.push({ sessionId: sid, code: r.code, message: r.message });
+      }
     } catch (error) {
       failures.push({ sessionId: sid, code: "internal", message: String(error) });
     }
   }
   const unavailableFailure = okCount === 0 && failures.length > 0 && failures.every((failure) => failure.code.endsWith("-unavailable") || failure.code.endsWith("-incompatible") || failure.code === "workspace-state-out-of-sync");
   if (unavailableFailure) {
-    sendJson(res, 503, { ok: false, code: failures[0].code, message: failures[0].message, deleted: 0, total: ids.length, failures });
+    sendJson(res, 503, { ok: false, code: failures[0].code, message: failures[0].message, deleted: 0, total: ids.length, cacheFailures, failures });
     return;
   }
-  sendJson(res, 200, { ok: true, deleted: okCount, total: ids.length, failures });
+  sendJson(res, 200, { ok: true, deleted: okCount, total: ids.length, cacheFailures, failures });
 }
 
 // ---- 插件主体 ----
@@ -817,4 +946,4 @@ function apply(ctx) {
   );
 }
 
-export { name, inject, apply, deleteSession, readArchivedReport, sessionDirFor };
+export { name, inject, apply, deleteSession, purgeProjectionCache, readArchivedReport, sessionDirFor };

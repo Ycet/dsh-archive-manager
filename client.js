@@ -76,7 +76,9 @@ window.__ModuleLoader__.load({
       deleteFail: "删除失败：{message}",
       deleteAllOk: "已删除 {n} 个会话",
       deleteAllPartial: "部分删除失败（{fail}/{total}）",
-      noticeFile: "（清理记录成功，但日志文件删除失败）"
+      noticeFile: "（清理记录成功，但日志文件删除失败）",
+      noticeCacheResidue: "（投影缓存可能在下次检查点后被重建，重启 DSH 可彻底清除）",
+      deleteAllOkResidue: "已删除 {n} 个会话（其中 {residue} 个的投影缓存残留，重启 DSH 可彻底清除）"
     };
 
     const en = {
@@ -115,7 +117,9 @@ window.__ModuleLoader__.load({
       deleteFail: "Delete failed: {message}",
       deleteAllOk: "Deleted {n} sessions",
       deleteAllPartial: "Some deletions failed ({fail}/{total})",
-      noticeFile: "(record cleaned, but log file removal failed)"
+      noticeFile: "(record cleaned, but log file removal failed)",
+      noticeCacheResidue: "(projection cache may be rewritten by the next checkpoint; restart DSH to clear it fully)",
+      deleteAllOkResidue: "Deleted {n} sessions ({residue} with projection-cache residue; restart DSH to clear it fully)"
     };
 
     // ---- i18n helper ----
@@ -152,6 +156,65 @@ window.__ModuleLoader__.load({
         body: JSON.stringify(body || {})
       }).then((r) => r.json());
     }
+
+    // ---- 浏览器端分会话状态清理 ----
+    // DSH 把每个会话的一些 UI 状态存进 localStorage（侧栏布局、输入框草稿、追问
+    // 草稿、侧栏浏览器状态），键名都是「前缀 + 完整 sessionId」。这些键没有清理
+    // 入口：DSH 既不会在删除会话时移除它们，也不会自动过期，于是删掉的会话仍会
+    // 在这里留下可读的残留（例如草稿文本）。
+    //
+    // 前缀不是公开契约，DSH 升级可能改名。因此这里集中维护、逐个容错：任一个键
+    // 读失败或被移除都继续处理其余键，整体失败也静默降级——清理失败不能影响
+    // 主机侧已经完成的删除结果。
+    const SESSION_LS_PREFIXES = [
+      "dsh.sidebar-right.v1.",          // dsh-client-ui-sidebar-right：右侧栏布局
+      "dsh.conversation.",              // dsh-client-ui-session：输入框草稿与视图
+      "dsh.user-questions.drafts.v1.",  // dsh-client-ui-user-questions：追问草稿
+      "dsh.sidebar-browser.v1."         // dsh-better-sidebar：侧栏浏览器状态（第三方）
+    ];
+    // 「上次打开的会话」指针。被删的正好是当前会话时，指针会指向一个已不存在的
+    // 会话，下次启动 DSH 会尝试打开它。
+    const CURRENT_SESSION_KEY = "dsh.sessions.current";
+
+    /**
+     * 移除一个会话在 localStorage 中的全部分会话键。
+     * @returns 实际移除的键数量（仅用于诊断，不参与成功判定）。
+     */
+    function purgeSessionLocalStorage(sessionId) {
+      if (typeof sessionId !== "string" || sessionId.length === 0) return 0;
+      let storage;
+      try {
+        storage = typeof localStorage === "undefined" ? null : localStorage;
+      } catch {
+        storage = null; // 某些环境下访问 localStorage 本身就会抛（隐私模式等）
+      }
+      if (storage === null) return 0;
+
+      let removed = 0;
+      for (const prefix of SESSION_LS_PREFIXES) {
+        try {
+          const key = prefix + sessionId;
+          if (storage.getItem(key) !== null) {
+            storage.removeItem(key);
+            removed += 1;
+          }
+        } catch {
+          /* 单个键失败不影响其余键 */
+        }
+      }
+      // 当前会话指针：值是形如 {"sessionId":"session-<uuid>"} 的 JSON。
+      // 命中时整键移除，让 DSH 回落到默认会话，而不是指向已删会话。
+      try {
+        const raw = storage.getItem(CURRENT_SESSION_KEY);
+        if (typeof raw === "string" && raw.indexOf(sessionId) !== -1) {
+          storage.removeItem(CURRENT_SESSION_KEY);
+        }
+      } catch {
+        /* ignore */
+      }
+      return removed;
+    }
+
     function formatTime(ms) {
       if (!ms) return "—";
       const d = new Date(ms);
@@ -370,18 +433,33 @@ window.__ModuleLoader__.load({
         runAction(
           () => postJson("/api/archive-manager/delete", { sessionId }),
           async (res) => {
+            // 主机侧已经删掉了日志与投影缓存；浏览器侧的分会话状态只能在这里清。
+            // 清理是 best-effort：结果只影响提示文案，不改变"已删除"的结论。
+            purgeSessionLocalStorage(sessionId);
             // 删除成功后，让 DSH 前端会话列表立即重拉：
             // 文件删除不会触发 host/session-removed 推送，侧边栏条目会残留到硬刷新。
             if (refreshSessions !== null) await refreshSessions();
             const root = t("deleteOk", { title });
-            return res.fileDeleted === false ? root + " " + t("noticeFile") : root;
+            const notes = [];
+            if (res.fileDeleted === false) notes.push(t("noticeFile"));
+            // 投影缓存残留：主机侧重试后仍在（多半是被 DSH 的异步检查点写回）。
+            if (res.cache && res.cache.ok === false) notes.push(t("noticeCacheResidue"));
+            if (notes.length === 0) return root;
+            return root + " " + notes.join(" ");
           }
         );
       };
       const onDeleteAll = () => {
         runAction(() => postJson("/api/archive-manager/delete-all", {}), async (res) => {
+          // 批量删除：主机侧响应只带计数，逐会话的 localStorage 清理需要各自 id。
+          // 这里按列表快照逐个清理（列表在删除前已加载）。
+          const targets = state.sessions.map((s) => s.sessionId);
+          for (const sid of targets) purgeSessionLocalStorage(sid);
           if (refreshSessions !== null) await refreshSessions();
-          if (res.deleted === res.total) return t("deleteAllOk", { n: res.deleted });
+          const residue = typeof res.cacheFailures === "number" ? res.cacheFailures : 0;
+          if (res.deleted === res.total) {
+            return residue > 0 ? t("deleteAllOkResidue", { n: res.deleted, residue }) : t("deleteAllOk", { n: res.deleted });
+          }
           return t("deleteAllPartial", { fail: res.failures ? res.failures.length : 0, total: res.total });
         });
       };
@@ -699,6 +777,10 @@ window.__ModuleLoader__.load({
     exports.NS = NS;
     exports.apply = apply;
     exports.inject = inject;
+    // 供测试直接验证分会话 localStorage 清理（浏览器侧无其他可观测入口）。
+    exports.SESSION_LS_PREFIXES = SESSION_LS_PREFIXES;
+    exports.CURRENT_SESSION_KEY = CURRENT_SESSION_KEY;
+    exports.purgeSessionLocalStorage = purgeSessionLocalStorage;
     return module.exports;
   }
 });

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import test from "node:test";
-import { apply, deleteSession, inject, readArchivedReport } from "../index.js";
+import { apply, deleteSession, inject, purgeProjectionCache, readArchivedReport } from "../index.js";
 
 // Optional integration against the installed DSH backend, not a hand-written list mock.
 for (const compression of ["none", "zstd"]) for (const noCwd of [false, true]) test(`real DSH ${compression} snapshots delete ungrouped artifacts (noCwd=${noCwd})`, {
@@ -115,7 +115,15 @@ test("snapshot deletion verifies backend absence before clearing archive records
   }
 });
 
-function makeHost({ archived = ["session-1"], includeRegistry = false, services = {}, workspacePath = "/tmp/project" } = {}) {
+/**
+ * 构造一个最小可用的 DSH 宿主替身。
+ *
+ * `projectionCache` 用于模拟 `session_projcache` 域，缺省（`undefined`）代表旧版
+ * DSH 未挂载该域，插件应当跳过缓存清理而不报错。传入一个 `Map` 即视为已挂载：
+ * 记录存在其中，`delete` 移除它，`get` 读它。传入 `{ table: ... }` 形式可自定义
+ * 表行为（例如模拟「删了又被异步写回」）。
+ */
+function makeHost({ archived = ["session-1"], includeRegistry = false, services = {}, workspacePath = "/tmp/project", projectionCache = undefined } = {}) {
   let globalState = { archivedSessionIds: archived.slice() };
   const workspaceRecords = new Map([
     ["workspace-1", { title: "Workspace", path: workspacePath, sessionIds: archived.slice() }]
@@ -136,6 +144,31 @@ function makeHost({ archived = ["session-1"], includeRegistry = false, services 
       return table;
     }
   };
+  // 投影缓存域：`undefined` = 未挂载（旧版 DSH）；`Map` = 由记录表自动派生行为；
+  // `{ table }` = 用自定义表模拟竞态或写入失败。
+  let projectionDomain;
+  if (projectionCache !== undefined) {
+    let sessionsTable;
+    if (projectionCache instanceof Map) {
+      const records = projectionCache;
+      sessionsTable = {
+        get: (key) => records.get(key),
+        async delete(key) {
+          const existed = records.has(key);
+          records.delete(key);
+          return existed;
+        }
+      };
+    } else {
+      sessionsTable = projectionCache.table;
+    }
+    projectionDomain = {
+      table: (name) => {
+        assert.equal(name, "sessions");
+        return sessionsTable;
+      }
+    };
+  }
   const routes = new Map();
   const webServer = {
     register(route) {
@@ -159,7 +192,7 @@ function makeHost({ archived = ["session-1"], includeRegistry = false, services 
     }
   };
   const serviceMap = {
-    storageDomain: { get: (name) => name === "workspace" ? domain : undefined },
+    storageDomain: { get: (name) => name === "workspace" ? domain : (name === "session_projcache" ? projectionDomain : undefined) },
     sessionPersistence: { list: async () => [] },
     ...(includeRegistry ? { workspaceRegistry: registry } : {}),
     ...services
@@ -686,4 +719,233 @@ test("delete-all reports 503 when destructive session checks are unavailable", a
   assert.equal(response.body.code, "sessions-unavailable");
   assert.equal(response.body.deleted, 0);
   assert.deepEqual(host.globalState().archivedSessionIds, ["session-1", "session-2"]);
+});
+
+// ---- 派生数据（投影缓存）清理 ----
+
+/** 构造一个能走到「文件已删、进入记录清理」阶段的宿主。 */
+function makeDeletableHost(extra = {}) {
+  const root = mkdtempSync(join(tmpdir(), "archive-cache-purge-"));
+  const dir = join(root, "session-1");
+  mkdirSync(dir, { recursive: true });
+  const header = { id: "session-1", cwd: root };
+  const host = makeHost({
+    archived: ["session-1"],
+    includeRegistry: true,
+    ...extra,
+    services: {
+      sessions: { get: () => undefined },
+      sessionPersistence: {
+        list: async () => [{ header, revision: "r1" }],
+        locate: () => ({ path: join(dir, "session.v4.jsonl.zstd") }),
+        stat: async () => undefined
+      },
+      ...(extra.services || {})
+    }
+  });
+  return { host, root, header };
+}
+
+test("purgeProjectionCache deletes through the domain API when the domain is mounted", async (t) => {
+  const records = new Map([["session-1", { identity: {}, rows: {} }]]);
+  const { host, root } = makeDeletableHost({ projectionCache: records });
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  const result = await purgeProjectionCache(host.ctx, "session-1");
+
+  assert.equal(result.ok, true);
+  assert.equal(result.deleted, true);
+  assert.equal(records.has("session-1"), false, "域 API 删除必须同时失效内存态");
+});
+
+test("purgeProjectionCache skips without failing when the domain is not mounted", async () => {
+  const { root } = makeDeletableHost();
+  const host = makeHost({ includeRegistry: true });
+  try {
+    const result = await purgeProjectionCache(host.ctx, "session-1");
+    assert.equal(result.ok, true, "未挂载该域是跳过而非失败");
+    assert.equal(result.skipped, "domain-not-open");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("purgeProjectionCache skips when the domain exposes no deletable table", async () => {
+  const host = makeHost({ includeRegistry: true, projectionCache: { table: {
+    get: () => undefined
+    // 故意不给 delete：旧版或结构不同的实现
+  } } });
+  const result = await purgeProjectionCache(host.ctx, "session-1");
+
+  assert.equal(result.ok, true);
+  assert.equal(result.skipped, "table-incompatible");
+});
+
+test("purgeProjectionCache retries and reports cache-reappeared when a write races back in", async (t) => {
+  // 模拟 session/disposed 的 fire-and-forget 检查点：delete 之后记录又出现。
+  let calls = 0;
+  const table = {
+    get: () => ({ identity: {}, rows: {} }),
+    async delete() {
+      calls += 1;
+      return true;
+    }
+  };
+  const { host, root } = makeDeletableHost({ projectionCache: { table } });
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  const result = await purgeProjectionCache(host.ctx, "session-1", { attempts: 3, intervalMs: 1 });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "cache-reappeared");
+  assert.equal(calls, 3, "三次尝试都要真正发起删除");
+});
+
+test("purgeProjectionCache reports cache-delete-failed when the domain write throws", async (t) => {
+  // 真实的 KvTable.delete 只在持久化成功后才更新内存，因此写入链抛错时
+  // 记录仍留在内存态：get 依然能读到它。
+  const { host, root } = makeDeletableHost({ projectionCache: { table: {
+    get: () => ({ identity: {}, rows: {} }),
+    async delete() { throw new Error("domain write chain quarantined"); }
+  } } });
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  const result = await purgeProjectionCache(host.ctx, "session-1", { attempts: 2, intervalMs: 1 });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "cache-delete-failed");
+});
+
+test("purgeProjectionCache treats an already-absent record as success", async () => {
+  // 缓存本就不存在（例如会话从未 checkpoint 过）：删除是 no-op，不该报失败。
+  const host = makeHost({ includeRegistry: true, projectionCache: new Map() });
+  const result = await purgeProjectionCache(host.ctx, "session-1");
+
+  assert.equal(result.ok, true);
+  assert.equal(result.deleted, false, "记录本就不存在时 deleted 应为 false");
+});
+
+test("deleteSession removes the projection cache after the log directory", async (t) => {
+  const records = new Map([["session-1", { identity: {}, rows: {} }]]);
+  const { host, root } = makeDeletableHost({ projectionCache: records });
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  const result = await deleteSession(host.ctx, "session-1");
+
+  assert.equal(result.ok, true);
+  assert.equal(result.fileDeleted, true);
+  assert.equal(result.cache.ok, true);
+  assert.equal(records.has("session-1"), false);
+  assert.deepEqual(host.globalState().archivedSessionIds, []);
+  assert.deepEqual(host.workspaceRecord().sessionIds, []);
+});
+
+test("a projection-cache failure never blocks the log deletion or archive cleanup", async (t) => {
+  const { host, root } = makeDeletableHost({ projectionCache: { table: {
+    get: () => ({ identity: {}, rows: {} }),
+    async delete() { return true; }
+  } } });
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  const result = await deleteSession(host.ctx, "session-1");
+
+  assert.equal(result.ok, true, "派生数据残留不得让主流程失败");
+  assert.equal(result.fileDeleted, true);
+  assert.equal(result.cache.ok, false);
+  assert.deepEqual(host.globalState().archivedSessionIds, [], "归档标记仍必须清除");
+  assert.deepEqual(host.workspaceRecord().sessionIds, []);
+});
+
+test("delete-all counts cache residue separately from hard failures", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "archive-cache-batch-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const ids = ["session-1", "session-2"];
+  const dirs = new Map();
+  for (const id of ids) {
+    const dir = join(root, id);
+    mkdirSync(dir, { recursive: true });
+    dirs.set(id, dir);
+  }
+  // 两个会话的缓存都无法删除：主流程全部成功，但 cacheFailures 应为 2。
+  const host = makeHost({
+    archived: ids,
+    includeRegistry: true,
+    projectionCache: { table: {
+      get: () => ({ identity: {}, rows: {} }),
+      async delete() { return true; }
+    } },
+    services: {
+      sessions: { get: () => undefined },
+      sessionPersistence: {
+        list: async () => ids.map((id) => ({ header: { id, cwd: root }, revision: "r1" })),
+        locate: (header) => ({ path: join(dirs.get(header.id), "session.v4.jsonl.zstd") }),
+        stat: async () => undefined
+      }
+    }
+  });
+
+  const response = await invoke(host, "/api/archive-manager/delete-all", {});
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.deleted, 2);
+  assert.equal(response.body.cacheFailures, 2);
+  assert.deepEqual(response.body.failures, []);
+  assert.deepEqual(host.globalState().archivedSessionIds, []);
+});
+
+// 与已安装的 DSH 真实存储栈联调（需要 DSH_TEST_INSTALL_ROOT）。
+test("real DSH storageDomain drops a session_projcache record", {
+  skip: !process.env.DSH_TEST_INSTALL_ROOT
+}, async (t) => {
+  const base = process.env.DSH_TEST_INSTALL_ROOT + "/node_modules/@deepseek-ai/";
+  const { Context } = await import(base + "cordis/lib/index.js");
+  const { defineDomain, domainTable } = await import(base + "dsh-storage-domain/lib/index.js");
+  // zod 是普通依赖（不在 @deepseek-ai 作用域下），从安装根的 node_modules 解析。
+  const zodRoot = process.env.DSH_TEST_INSTALL_ROOT.replace(/\/dsh$/, "");
+  const { z } = await import(zodRoot + "/node_modules/zod/index.js");
+
+  const root = mkdtempSync(join(tmpdir(), "archive-real-projcache-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  // 与会话投影缓存同形状的领域声明：验证「域 API 删除」这条通道本身。
+  const spec = defineDomain({
+    name: "session_projcache",
+    version: 1,
+    layout: "per-record",
+    tables: {
+      sessions: domainTable(z.object({ identity: z.unknown(), rows: z.unknown() }))
+    }
+  });
+
+  // 直接挂载存储栈所需的三个插件，再打开该领域。
+  // dsh-storage 走 default（Service 子类）；另两个只导出 apply/inject，没有 default，
+  // 因此要挑出 { apply, inject } 形状的插件对象交给 plugin()。
+  const ctx = new Context();
+  t.after(() => ctx.root?.dispose?.());
+
+  const storage = await import(base + "dsh-storage/lib/index.js");
+  const storageJson = await import(base + "dsh-storage-json/lib/index.js");
+  const storageDomain = await import(base + "dsh-storage-domain/lib/index.js");
+  const asPlugin = (ns) => (ns.default ?? { apply: ns.apply, inject: ns.inject });
+
+  ctx.plugin(storage.default ?? storage, {});
+  ctx.plugin(asPlugin(storageJson), { root: join(root, "storages") });
+  ctx.plugin(asPlugin(storageDomain), { backend: "json" });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+
+  const domain = await ctx.storageDomain.open(spec);
+  const table = domain.table("sessions");
+  await table.put("session-1", { identity: { a: 1 }, rows: { title: "x" } });
+  assert.notEqual(table.get("session-1"), undefined);
+
+  const result = await purgeProjectionCache(
+    { get: (name) => (name === "storageDomain" ? ctx.storageDomain : undefined) },
+    "session-1"
+  );
+
+  assert.equal(result.ok, true, `真实域上删除应成功，实际: ${JSON.stringify(result)}`);
+  assert.equal(table.get("session-1"), undefined, "删除后内存态必须同步失效");
+  assert.equal(table.size, 0, "该会话的记录已从域表移除");
+  await domain.close();
 });

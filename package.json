@@ -1,7 +1,19 @@
 {
-  "name": "dsh-archive-manager",
-  "version": "0.2.1",
-  "description": "DeepSeek Harness web-GUI plugin: a Settings「归档」page to view archived sessions grouped by workspace, filter (all/one workspace) and sort (name / created time), unarchive a session so it reappears in the sidebar and can be reopened, and permanently delete one or all archived sessions (each delete guarded by a second confirmation dialog).",
+  "name": "@ycet/dsh-archive-manager",
+  "version": "0.3.0",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ycet/dsh-archive-manager.git"
+  },
+  "homepage": "https://github.com/Ycet/dsh-archive-manager#readme",
+  "bugs": {
+    "url": "https://github.com/Ycet/dsh-archive-manager/issues"
+  },
+  "description": "DeepSeek Harness web-GUI plugin: a Settings「归档」page to view archived sessions grouped by workspace, filter (all/one workspace) and sort (name / created time), unarchive a session so it reappears in the sidebar and can be reopened, and permanently delete one or all archived sessions (each delete guarded by a second confirmation dialog). Deleting also clears the session's derived data: its projection cache through the official storageDomain API, and its browser-side per-session localStorage state.",
   "type": "module",
   "main": "index.js",
   "scripts": {
@@ -13,6 +25,7 @@
     "client.js",
     "cordis.patch.yml",
     "README.md",
+    "README_en.md",
     "LICENSE"
   ],
   "exports": {

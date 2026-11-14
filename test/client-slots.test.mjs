@@ -6,7 +6,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+// bundle 只在首次 import 时向 window.__ModuleLoader__ 注册工厂。
+// 多个测试共享它：并发地反复设置 globalThis.window 会让后到的 import 什么都不注册，
+// 因此这里缓存工厂，并把测试改为串行（见文件末尾的 { concurrency: 1 } 说明）。
+let cachedFactory;
 async function loadClientBundle() {
+  if (cachedFactory !== undefined) return cachedFactory;
   const previousWindow = globalThis.window;
   let descriptor;
   globalThis.window = {
@@ -21,7 +26,7 @@ async function loadClientBundle() {
     url.searchParams.set("test", String(Date.now()));
     await import(url.href);
     assert.ok(descriptor, "client bundle should register with ModuleLoader");
-    return descriptor.factory((name) => {
+    cachedFactory = descriptor.factory((name) => {
       if (name === "react") {
         return {
           createElement: (type, props, ...children) => ({ type, props, children }),
@@ -38,6 +43,7 @@ async function loadClientBundle() {
       }
       throw new Error(`unexpected client dependency: ${name}`);
     });
+    return cachedFactory;
   } finally {
     if (previousWindow === undefined) delete globalThis.window;
     else globalThis.window = previousWindow;
@@ -95,4 +101,100 @@ test("客户端注册 settings.section 与官方 settings.section.icon 两个槽
   assert.ok(icon, "应注册分区图标");
   assert.equal(icon.id, "archives");
   assert.equal(icon.order, 40);
+});
+
+// ---- 浏览器端分会话 localStorage 清理 ----
+// 删除会话后 DSH 不会自己清掉这些键，插件在浏览器侧补做（best-effort）。
+
+/** 用一个内存 Map 模拟 localStorage，记录所有读删操作。 */
+function makeFakeStorage(seed = {}) {
+  const map = new Map(Object.entries(seed));
+  const ops = [];
+  return {
+    map,
+    ops,
+    getItem(key) { ops.push(["get", key]); return map.has(key) ? map.get(key) : null; },
+    removeItem(key) { ops.push(["remove", key]); map.delete(key); },
+    setItem(key, value) { map.set(key, String(value)); }
+  };
+}
+
+async function withFakeLocalStorage(seed, run) {
+  const storage = makeFakeStorage(seed);
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", { value: storage, configurable: true, writable: true });
+  try {
+    return await run(storage);
+  } finally {
+    if (previous === undefined) delete globalThis.localStorage;
+    else Object.defineProperty(globalThis, "localStorage", previous);
+  }
+}
+
+test("purgeSessionLocalStorage removes every per-session key of the deleted session", async () => {
+  const client = await loadClientBundle();
+  const sid = "session-11111111-2222-3333-4444-555555555555";
+  const other = "session-99999999-8888-7777-6666-555555555555";
+  const seed = {};
+  for (const prefix of client.SESSION_LS_PREFIXES) {
+    seed[prefix + sid] = "value-for-deleted";
+    seed[prefix + other] = "value-for-survivor";
+  }
+  seed["dsh.workspace.view.v5"] = "unrelated";
+
+  await withFakeLocalStorage(seed, ({ map }) => {
+    const removed = client.purgeSessionLocalStorage(sid);
+
+    assert.equal(removed, client.SESSION_LS_PREFIXES.length, "每个已存在的分会话键都应被移除");
+    for (const prefix of client.SESSION_LS_PREFIXES) {
+      assert.equal(map.has(prefix + sid), false, `应移除 ${prefix}<id>`);
+      assert.equal(map.get(prefix + other), "value-for-survivor", "不得误删其他会话的键");
+    }
+    assert.equal(map.get("dsh.workspace.view.v5"), "unrelated", "不得触碰非会话键");
+  });
+});
+
+test("purgeSessionLocalStorage clears the current-session pointer only when it names the deleted session", async () => {
+  const client = await loadClientBundle();
+  const sid = "session-aaaa1111-2222-3333-4444-555555555555";
+  const pointerKey = client.CURRENT_SESSION_KEY;
+
+  // 指针指向被删会话 → 整键移除，避免 DSH 下次启动去打开一个不存在的会话。
+  await withFakeLocalStorage({ [pointerKey]: JSON.stringify({ sessionId: sid }) }, ({ map }) => {
+    client.purgeSessionLocalStorage(sid);
+    assert.equal(map.has(pointerKey), false);
+  });
+
+  // 指针指向别的会话 → 必须保留。
+  const other = "session-bbbb1111-2222-3333-4444-555555555555";
+  await withFakeLocalStorage({ [pointerKey]: JSON.stringify({ sessionId: other }) }, ({ map }) => {
+    client.purgeSessionLocalStorage(sid);
+    assert.equal(map.get(pointerKey), JSON.stringify({ sessionId: other }), "不得清除指向其他会话的指针");
+  });
+});
+
+test("purgeSessionLocalStorage degrades silently when localStorage is unavailable", async () => {
+  const client = await loadClientBundle();
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  // 隐私模式下访问 localStorage 本身就会抛。
+  Object.defineProperty(globalThis, "localStorage", {
+    get() { throw new Error("access denied"); },
+    configurable: true
+  });
+  try {
+    assert.doesNotThrow(() => client.purgeSessionLocalStorage("session-x"));
+    assert.equal(client.purgeSessionLocalStorage("session-x"), 0);
+  } finally {
+    if (previous === undefined) delete globalThis.localStorage;
+    else Object.defineProperty(globalThis, "localStorage", previous);
+  }
+});
+
+test("purgeSessionLocalStorage ignores a missing or malformed session id", async () => {
+  const client = await loadClientBundle();
+  await withFakeLocalStorage({}, () => {
+    assert.equal(client.purgeSessionLocalStorage(undefined), 0);
+    assert.equal(client.purgeSessionLocalStorage(""), 0);
+    assert.equal(client.purgeSessionLocalStorage(null), 0);
+  });
 });
