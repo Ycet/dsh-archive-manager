@@ -8,8 +8,8 @@
 A DeepSeek Harness (DSH) web-GUI plugin: adds an "Archive" page to the settings window for viewing, filtering, sorting, unarchiving and permanently deleting archived DSH sessions.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg?style=for-the-badge)](package.json)
-[![DSH](https://img.shields.io/badge/DSH-0.1.0--rc.6%2B-purple.svg?style=for-the-badge)](https://github.com/deepseek-ai/deepseek-harness)
+[![Version](https://img.shields.io/badge/version-0.4.1-blue.svg?style=for-the-badge)](package.json)
+[![DSH](https://img.shields.io/badge/DSH-0.2.1--rc.2%2B-purple.svg?style=for-the-badge)](https://github.com/deepseek-ai/deepseek-harness)
 
 </div>
 
@@ -30,6 +30,8 @@ A DeepSeek Harness (DSH) web-GUI plugin: adds an "Archive" page to the settings 
 ---
 
 > [!NOTE]
+> `0.4.1` turns the action buttons into **icon buttons**: each row's "Unarchive" now uses DSH's built-in unarchive icon (archive box with an up arrow), while "Delete", "Delete group" and "Delete all" use a red trash icon; the original labels remain as tooltips and accessible names. The confirm button in the delete dialog now uses red text with a red outline on a transparent background instead of a solid red fill.
+>
 > `0.4.0` adds **one-click deletion per workspace**: every workspace group header now has a "Delete group" button that permanently deletes only that group's archived sessions after a second confirmation, and the "Ungrouped" group works the same way. The toolbar "Delete all" still deletes everything, but its count now reflects all archived sessions instead of the filtered subset. This release also fixes the client registration id that was left at the old package name after the rename to `dsh-archive-manager-ycet`, which made the page report a plugin sync failure.
 >
 > `0.3.0` makes "Delete" actually clean up: besides the log directory, it now removes the session's **projection cache** (through the official `storageDomain` domain API, invalidating both disk and memory) and its **browser-side per-session state** (sidebar layout, composer draft, follow-up-question draft, sidebar-browser state, plus the "last opened session" pointer when it names the deleted session). A failed derived-data cleanup never blocks the main flow — it is only mentioned in the success notice.
@@ -40,7 +42,7 @@ A DeepSeek Harness (DSH) web-GUI plugin: adds an "Archive" page to the settings 
 
 ![Archive page preview](assets/screenshot/archive-page.png)
 
-*Workspace-grouped list + filter/sort toolbar*
+*Workspace-grouped list + filter/sort toolbar; unarchive and delete are icon buttons, with delete in red*
 
 ---
 
@@ -51,9 +53,9 @@ A DeepSeek Harness (DSH) web-GUI plugin: adds an "Archive" page to the settings 
 | **View archived sessions** | A new "Archive" page in the settings window lists all archived sessions, grouped by workspace; sessions not belonging to any workspace go under "(Unassigned)" |
 | **Filter** | Filter archived sessions by "All workspaces", a specific workspace, or "Ungrouped"; the dropdown only lists workspaces that **own at least one archived session**, and the "Ungrouped" option only appears when ungrouped archived sessions exist |
 | **Sort** | Sort by session name (alphabetical asc/desc) or by session creation time (asc/desc) |
-| **Unarchive** | Removes a session from the archive set; it **reappears in the corresponding workspace group in the left sidebar** and can be opened |
-| **Delete (with confirmation)** | Delete a single session, delete every archived session of one workspace, or "Delete all" at once; every delete is guarded by a second confirmation dialog — it only runs after clicking "Confirm delete" |
-| **Delete per workspace** | Each workspace group header has a "Delete group" button that deletes only that group's archived sessions; the "Ungrouped" group is supported too. The dialog names the workspace and session count, and sessions are deleted one by one with an aggregated result |
+| **Unarchive** | The row action uses DSH's built-in unarchive icon (archive box with an up arrow); it removes a session from the archive set, so it **reappears in the corresponding workspace group in the left sidebar** and can be opened |
+| **Delete (with confirmation)** | "Delete", "Delete group" and "Delete all" are red trash icon buttons; every delete is guarded by a second confirmation dialog whose confirm button is red text with a red outline on a transparent background — it only runs after clicking "Confirm delete" |
+| **Delete per workspace** | Each workspace group header has a delete-group icon button (red trash) that deletes only that group's archived sessions; the "Ungrouped" group is supported too. The dialog names the workspace and session count, and sessions are deleted one by one with an aggregated result |
 | **Permanent deletion** | Deletion removes the session log file (`session.jsonl.zstd`), the archive marker and the workspace bookkeeping — irreversible |
 | **Bilingual UI** | UI text follows DSH's active language (中文 / English) |
 
@@ -75,10 +77,10 @@ dsh plugin --profile web add dsh-archive-manager-ycet
 dsh plugin --profile web add dsh-archive-manager-ycet@link:<absolute-path-to-plugin>
 
 # Option 3: install from GitHub (pinned to a release tag; requires git)
-dsh plugin --profile web add "github:Ycet/dsh-archive-manager#v0.4.0"
+dsh plugin --profile web add "github:Ycet/dsh-archive-manager#v0.4.1"
 
 # Option 4: install from a Release asset (tarball; no git, no npm account)
-dsh plugin --profile web add "https://github.com/Ycet/dsh-archive-manager/releases/download/v0.4.0/dsh-archive-manager-ycet-0.4.0.tgz"
+dsh plugin --profile web add "https://github.com/Ycet/dsh-archive-manager/releases/download/v0.4.1/dsh-archive-manager-ycet-0.4.1.tgz"
 ```
 
 The package declares a `dsh.bundle` patch layer; `dsh plugin` merges the loader entry into the profile's bundle layer automatically — no manual editing of `cordis.patch.yml` required. Options 2–4 need no npm account; for the desktop app replace `--profile web` with `--profile desktop` (using the desktop-bundled CLI).

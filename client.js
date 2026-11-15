@@ -3,10 +3,12 @@
 // expects: it only REGISTERS the factory; the body runs at materialization.
 // It registers a settings.section entry ("归档") and renders the archived
 // sessions page: grouped by workspace, filterable (all / one workspace),
-// sortable (name / created time), with per-session "取消归档" and "删除"
-// actions, a per-workspace group "删除本组" action, and a top "删除全部"
-// action — every delete guarded by a second confirmation dialog. All mutations
-// go through the same-origin routes registered by the host half.
+// sortable (name / created time), with per-session "取消归档" (DSH unarchive
+// icon) and "删除" (red trash icon) actions, a per-workspace group delete
+// trash icon, and a top "删除全部" trash icon — every delete guarded by a
+// second confirmation dialog whose confirm button is a red-text/red-outline
+// ghost button. All mutations go through the same-origin routes registered by
+// the host half.
 window.__ModuleLoader__.load({
   // 注册 id 必须与 package.json 的 name 完全一致，否则客户端模块加载器
   // 会报 "loaded without registering"，插件在页面上同步失败。
@@ -30,6 +32,34 @@ window.__ModuleLoader__.load({
       { viewBox: "0 0 20 20", width: 16, height: 16, "aria-hidden": true, focusable: "false", "data-dsh-archive-injected": "1", style: { display: "block" } },
       React.createElement("path", { fillRule: "evenodd", clipRule: "evenodd", fill: "currentColor", d: ARCHIVE_ICON_D1 }),
       React.createElement("path", { fill: "currentColor", d: ARCHIVE_ICON_D2 })
+    );
+
+    // ---- 删除图标（来源：00_assets/icons/dsh-awesome-hud/ic-trash-outline-16.svg） ----
+    // 16×16 画布、单路径的描边垃圾桶（同目录资产：assets/icons/trash.svg）；
+    // fill=currentColor，图标颜色由按钮的 color 决定（本页统一为红色
+    // state-error-primary），无需另存图片资源。
+    const TRASH_ICON_PATH = "M14.4782 4.84067L14.2138 10.1152C14.1102 12.1872 14.067 13.0115 13.3866 13.9607C13.1044 14.3546 12.7498 14.6912 12.3424 14.9535C11.8239 15.2872 11.2415 15.4316 10.5585 15.4998C9.88727 15.5668 9.04946 15.5656 7.99998 15.5656C6.95051 15.5656 6.1127 15.5668 5.44142 15.4998C4.75851 15.4316 4.17602 15.2872 3.65753 14.9535C3.25012 14.6912 2.89559 14.3546 2.61332 13.9607C1.93296 13.0115 1.88979 12.1872 1.78619 10.1152L1.52179 4.84067L2.89006 4.77277L3.15343 10.0463C3.26221 12.2218 3.32452 12.6015 3.72646 13.1624C3.90825 13.4161 4.13686 13.6334 4.39927 13.8023C4.66204 13.9714 5.00263 14.0792 5.57825 14.1367C6.16562 14.1953 6.92298 14.1963 7.99998 14.1963C9.07699 14.1963 9.83434 14.1953 10.4217 14.1367C10.9973 14.0792 11.3379 13.9714 11.6007 13.8023C11.8631 13.6334 12.0917 13.4161 12.2735 13.1624C12.6755 12.6015 12.7378 12.2218 12.8465 10.0463L13.1099 4.77277L14.4782 4.84067ZM5.43011 6.22849H6.7994V11.3909H5.43011V6.22849ZM9.20056 6.22849H10.5699V11.3909H9.20056V6.22849ZM8.53597 0.434431C9.17976 0.434431 9.6522 0.426926 10.0966 0.571258C10.2357 0.616451 10.3717 0.672554 10.502 0.738948C10.9182 0.951107 11.2464 1.29099 11.7015 1.74612L12.4978 2.54136H15.3742V3.91169H0.625732V2.54136H3.50218L4.29845 1.74612C4.75358 1.29099 5.08174 0.951107 5.49801 0.738948C5.62831 0.672554 5.76425 0.616451 5.90334 0.571258C6.34776 0.426926 6.82021 0.434431 7.46399 0.434431H8.53597ZM7.46399 1.80476C6.73208 1.80476 6.51641 1.81187 6.32617 1.87369C6.25545 1.89667 6.18668 1.92533 6.12041 1.95907C5.96398 2.03878 5.82348 2.16253 5.44142 2.54136H10.5585C10.1765 2.16253 10.036 2.03878 9.87955 1.95907C9.81329 1.92533 9.74452 1.89667 9.6738 1.87369C9.48356 1.81187 9.26789 1.80476 8.53597 1.80476H7.46399Z";
+    const TRASH_ICON = React.createElement(
+      "svg",
+      { viewBox: "0 0 16 16", width: 16, height: 16, fill: "none", "aria-hidden": true, focusable: "false", style: { display: "block" } },
+      React.createElement("path", { fill: "currentColor", d: TRASH_ICON_PATH })
+    );
+
+    // ---- 取消归档图标（来源：DSH 内置 unarchive-outline 图标） ----
+    // 与侧栏会话「取消归档」按钮同款：归档盒轮廓 + 向上的箭头（同目录资产：
+    // assets/icons/unarchive.svg）。盒体与导航图标共用同一条路径
+    // （ARCHIVE_ICON_D1），箭头为描边，故此处单独给出。
+    const UNARCHIVE_ICON = React.createElement(
+      "svg",
+      { viewBox: "0 0 20 20", width: 16, height: 16, fill: "none", "aria-hidden": true, focusable: "false", style: { display: "block" } },
+      React.createElement("path", { fillRule: "evenodd", clipRule: "evenodd", fill: "currentColor", d: ARCHIVE_ICON_D1 }),
+      React.createElement("path", {
+        d: "M10 14.1V10.1M7.85 12.05L10 9.9L12.15 12.05",
+        stroke: "currentColor",
+        strokeWidth: 1.5,
+        strokeLinecap: "round",
+        strokeLinejoin: "round"
+      })
     );
 
     const NS = "settings.archiveManager";
@@ -286,11 +316,24 @@ window.__ModuleLoader__.load({
       },
       buttonsRow: { display: "flex", alignItems: "center", gap: 10, marginLeft: "auto" },
       count: { fontSize: 12, color: "var(--dsw-alias-label-tertiary)" },
-      dangerButton: {
-        fontSize: 13, padding: "5px 12px", borderRadius: 6, cursor: "pointer",
-        border: "1px solid var(--dsw-alias-state-error-primary, #d93025)", color: "var(--dsw-alias-state-error-primary, #d93025)",
-        background: "transparent"
+      // 图标按钮：对齐 DSH 自带的会话行 iconButton（24×24、无边框、透明底），
+      // 上下各 -4px 的外边距让按钮的行高与文字行保持一致，不把列表行撑高。
+      iconButton: {
+        flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center",
+        width: 24, height: 24, marginTop: -4, marginBottom: -4, padding: 0,
+        border: "none", borderRadius: 6, background: "transparent",
+        color: "var(--dsw-alias-label-tertiary, #61666b)", lineHeight: 0, cursor: "pointer"
       },
+      // 悬停：底色用极淡的中性色块，图标提亮到主文字色（危险按钮除外）。
+      iconButtonHover: {
+        background: "var(--dsw-alias-bg-module-platform, rgba(127,127,127,0.14))",
+        color: "var(--dsw-alias-label-primary, #0f1115)"
+      },
+      // 危险图标按钮：图标恒为红色，悬停时只加深底色，不改变图标颜色。
+      iconButtonDanger: { color: "var(--dsw-alias-state-error-primary, #d93025)" },
+      iconButtonDangerHover: { background: "rgba(217, 48, 37, 0.12)" },
+      // 分组头部右侧的整组删除图标：靠 marginLeft:auto 右对齐。
+      groupIconButton: { marginLeft: "auto", flexShrink: 0 },
       group: { marginBottom: 20 },
       groupHeader: {
         display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: 6,
@@ -298,12 +341,6 @@ window.__ModuleLoader__.load({
       },
       groupTitle: { fontWeight: 600, fontSize: 13, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
       groupCount: { fontSize: 12, color: "var(--dsw-alias-label-tertiary)", flexShrink: 0 },
-      // 分组头部右侧的整组删除按钮：比行内 dangerButton 更紧凑，靠 marginLeft:auto 右对齐。
-      groupDeleteButton: {
-        marginLeft: "auto", flexShrink: 0, fontSize: 12, padding: "2px 8px", borderRadius: 6, cursor: "pointer",
-        border: "1px solid var(--dsw-alias-state-error-primary, #d93025)",
-        color: "var(--dsw-alias-state-error-primary, #d93025)", background: "transparent"
-      },
       row: {
         display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 6,
         borderBottom: "1px solid var(--dsw-alias-border-l1, #0000000a)"
@@ -331,12 +368,45 @@ window.__ModuleLoader__.load({
       dialogTitle: { margin: "0 0 10px", fontSize: 16, fontWeight: 600 },
       dialogBody: { fontSize: 14, lineHeight: 1.6, color: "var(--dsw-alias-label-secondary, #61666b)", marginBottom: 16, wordBreak: "break-word" },
       dialogActions: { display: "flex", justifyContent: "flex-end", gap: 8 },
+      // 二次确认弹窗里的危险主按钮：按产品要求改成「红色文字 + 红色描边 + 透明底」
+      // 的描边按钮，不再整块红色填充；破坏性语义由红色文字与描边承担。
       primaryDangerButton: {
         fontSize: 13, padding: "6px 14px", borderRadius: 6, cursor: "pointer",
         border: "1px solid var(--dsw-alias-state-error-primary, #d93025)",
-        background: "var(--dsw-alias-state-error-primary, #d93025)", color: "var(--dsw-alias-label-primary-foreground, #fff)"
+        background: "transparent",
+        color: "var(--dsw-alias-state-error-primary, #d93025)"
       }
     };
+
+    // ---- IconButton ----
+    // 把「取消归档」「删除」等动作收成纯图标：文字只留在 title / aria-label 里，
+    // 供悬停提示与读屏使用；图标的颜色由 danger 决定（危险动作为红色）。
+    function IconButton({ label, ariaLabel, onClick, disabled, danger, style, children }) {
+      const [hover, setHover] = React.useState(false);
+      const active = hover && !disabled;
+      const composed = {
+        ...styles.iconButton,
+        ...(active ? styles.iconButtonHover : null),
+        ...(danger ? styles.iconButtonDanger : null),
+        ...(active && danger ? styles.iconButtonDangerHover : null),
+        ...(disabled ? styles.defaultButtonDisabled : null),
+        ...style
+      };
+      return React.createElement(
+        "button",
+        {
+          type: "button",
+          style: composed,
+          title: label,
+          "aria-label": ariaLabel || label,
+          disabled,
+          onClick,
+          onMouseEnter: () => setHover(true),
+          onMouseLeave: () => setHover(false)
+        },
+        children
+      );
+    }
 
     // ---- ConfirmDialog ----
     function ConfirmDialog({ title, body, onConfirm, onCancel, busy, t }) {
@@ -352,7 +422,11 @@ window.__ModuleLoader__.load({
             "div",
             { style: styles.dialogActions },
             React.createElement("button", { style: styles.defaultButton, onClick: onCancel, disabled: busy }, t("cancel")),
-            React.createElement("button", { style: styles.primaryDangerButton, onClick: onConfirm, disabled: busy }, busy ? "…" : t("confirmPrimary"))
+            React.createElement("button", {
+              style: busy ? { ...styles.primaryDangerButton, ...styles.defaultButtonDisabled } : styles.primaryDangerButton,
+              onClick: onConfirm,
+              disabled: busy
+            }, busy ? "…" : t("confirmPrimary"))
           )
         )
       );
@@ -605,16 +679,20 @@ window.__ModuleLoader__.load({
               (s.createdAt ? t("createdLabel", { time: formatTime(s.createdAt) }) : "—")
             ),
             React.createElement("div", { style: styles.rowActions },
-              React.createElement("button", {
-                style: state.busy ? { ...styles.defaultButton, ...styles.defaultButtonDisabled } : styles.defaultButton,
+              // 取消归档：DSH 内置 unarchive 图标（归档盒 + 向上箭头）
+              React.createElement(IconButton, {
+                label: t("unarchive"),
                 disabled: state.busy,
                 onClick: () => onUnarchive(s.sessionId, s.title)
-              }, t("unarchive")),
-              React.createElement("button", {
-                style: state.busy ? { ...styles.dangerButton, ...styles.defaultButtonDisabled } : styles.dangerButton,
+              }, UNARCHIVE_ICON),
+              // 删除：红色垃圾桶图标
+              React.createElement(IconButton, {
+                label: t("delete"),
+                ariaLabel: `${t("delete")}：${s.title}`,
+                danger: true,
                 disabled: state.busy,
                 onClick: () => set({ confirm: { kind: "single", sessionId: s.sessionId, title: s.title } })
-              }, t("delete"))
+              }, TRASH_ICON)
             )
           )
         );
@@ -657,11 +735,13 @@ window.__ModuleLoader__.load({
             // 计数与「删除全部」都按全部归档会话统计，不受筛选影响；避免出现
             // 「显示筛选后的 N 个、实际删掉全部」的误解。
             React.createElement("span", { style: styles.count }, t("archiveCount", { n: state.sessions.length })),
-            React.createElement("button", {
-              style: state.busy || state.sessions.length === 0 ? { ...styles.dangerButton, ...styles.defaultButtonDisabled } : styles.dangerButton,
+            // 「删除全部」：红色垃圾桶图标按钮
+            React.createElement(IconButton, {
+              label: t("deleteAll"),
+              danger: true,
               disabled: state.busy || state.sessions.length === 0,
               onClick: () => set({ confirm: { kind: "all" } })
-            }, t("deleteAll"))
+            }, TRASH_ICON)
           )
         ),
 
@@ -675,11 +755,12 @@ window.__ModuleLoader__.load({
                   React.createElement("div", { style: styles.groupHeader },
                     React.createElement("span", { style: styles.groupTitle }, g.title),
                     React.createElement("span", { style: styles.groupCount }, `(${g.items.length})`),
-                    React.createElement("button", {
-                      style: state.busy ? { ...styles.groupDeleteButton, ...styles.defaultButtonDisabled } : styles.groupDeleteButton,
+                    React.createElement(IconButton, {
+                      label: t("deleteGroup"),
+                      ariaLabel: `${t("deleteGroup")}：${g.title}`,
+                      danger: true,
                       disabled: state.busy,
-                      title: t("deleteGroup"),
-                      "aria-label": `${t("deleteGroup")}：${g.title}`,
+                      style: styles.groupIconButton,
                       onClick: () => set({
                         confirm: {
                           kind: "workspace",
@@ -690,7 +771,7 @@ window.__ModuleLoader__.load({
                           sessionIds: g.items.map((s) => s.sessionId)
                         }
                       })
-                    }, t("deleteGroup"))
+                    }, TRASH_ICON)
                   ),
                   rows(g.items)
                 )

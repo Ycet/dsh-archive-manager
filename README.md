@@ -8,7 +8,7 @@
 DeepSeek Harness（DSH）Web 界面插件：在设置窗口新增「归档」页，查看、筛选、排序、取消归档与彻底删除已归档会话。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg?style=for-the-badge)](package.json)
+[![Version](https://img.shields.io/badge/version-0.4.1-blue.svg?style=for-the-badge)](package.json)
 [![DSH](https://img.shields.io/badge/DSH-0.2.1--rc.2%2B-purple.svg?style=for-the-badge)](https://github.com/deepseek-ai/deepseek-harness)
 
 </div>
@@ -30,6 +30,8 @@ DeepSeek Harness（DSH）Web 界面插件：在设置窗口新增「归档」页
 ---
 
 > [!NOTE]
+> `0.4.1` 把操作按钮统一为**图标化**：每行的「取消归档」改为 DSH 内置的取消归档图标（归档盒 + 向上箭头），「删除」「删除本组」「删除全部」改为红色垃圾桶图标，原文字保留为悬停提示与读屏标签；删除二次确认弹窗的主按钮改为「红色文字 + 红色描边 + 透明底」，不再整块红色填充。
+>
 > `0.4.0` 新增**按工作区一键删除**：每个工作区分组头部有「删除本组」按钮，二次确认后只删除该组的归档会话，「未分组」组同样支持；顶栏「删除全部」仍是全局删除，但计数改为全部归档会话数（不再随筛选变化）。同时修复包名改为 `dsh-archive-manager-ycet` 后客户端注册 id 未同步、页面提示「插件未能完成同步」的问题。
 >
 > `0.3.0` 让「删除」真正清干净：除原有的日志目录，还会移除该会话的**投影缓存**（走官方 `storageDomain` 领域 API，磁盘与内存同时失效）与**浏览器端分会话状态**（侧栏布局、输入框草稿、追问草稿、侧栏浏览器状态，以及指向它的「上次打开的会话」指针）。派生数据清理失败不会阻断主流程，只在成功提示里附带说明。
@@ -40,7 +42,7 @@ DeepSeek Harness（DSH）Web 界面插件：在设置窗口新增「归档」页
 
 ![「设置：归档」页界面预览](assets/screenshot/archive-page.png)
 
-*工作区分组列表 + 筛选/排序工具条*
+*工作区分组列表 + 筛选/排序工具条；取消归档与删除均为图标按钮，删除按钮为红色*
 
 ---
 
@@ -51,9 +53,9 @@ DeepSeek Harness（DSH）Web 界面插件：在设置窗口新增「归档」页
 | **查看已归档会话** | 设置窗口新增「归档」页，列出所有已归档会话，并按工作区（workspace）分组；不属于任何工作区的会话归入「(未分组)」 |
 | **筛选** | 按「全部工作区」、某个具体工作区或「未分组」过滤归档会话；筛选菜单只列出**至少有一个已归档会话**的工作区，仅当存在未分组归档会话时才出现「未分组」选项 |
 | **排序** | 按会话名称（字母序升/降）、按会话创建时间（升/降）两种维度排序 |
-| **取消归档** | 会话从归档集合中移除，并**重新出现在左侧边栏对应工作区分组**中，可点击打开聊天窗口 |
-| **删除（二次确认）** | 可删除单个会话、删除某个工作区的全部归档会话，或一次「删除全部」；所有删除操作都弹出二次确认弹窗，仅点击「确认删除」才真正执行 |
-| **按工作区删除** | 每个工作区分组头部有「删除本组」按钮，只删除该组的归档会话；「未分组」组同样支持。确认弹窗显示工作区名与会话数量，组内会话逐个独立删除并汇总结果 |
+| **取消归档** | 行内「取消归档」使用 DSH 内置的取消归档图标（归档盒 + 向上箭头）；会话从归档集合中移除，并**重新出现在左侧边栏对应工作区分组**中，可点击打开聊天窗口 |
+| **删除（二次确认）** | 「删除」「删除本组」「删除全部」统一为红色垃圾桶图标按钮；所有删除操作都弹出二次确认弹窗，弹窗主按钮为红色文字 + 红色描边 + 透明底，仅点击「确认删除」才真正执行 |
+| **按工作区删除** | 每个工作区分组头部有整组删除图标按钮（红色垃圾桶），只删除该组的归档会话；「未分组」组同样支持。确认弹窗显示工作区名与会话数量，组内会话逐个独立删除并汇总结果 |
 | **彻底删除** | 删除会移除会话日志文件（`session.jsonl.zstd`）、归档标记及工作区记账，不可恢复 |
 | **多语言界面** | 界面文案跟随 DSH 活动语言（中文 / English） |
 
@@ -75,10 +77,10 @@ dsh plugin --profile web add dsh-archive-manager-ycet
 dsh plugin --profile web add dsh-archive-manager-ycet@link:<absolute-path-to-plugin>
 
 # 方式三：从 GitHub 安装（锁定版本 tag，需本机有 git）
-dsh plugin --profile web add "github:Ycet/dsh-archive-manager#v0.4.0"
+dsh plugin --profile web add "github:Ycet/dsh-archive-manager#v0.4.1"
 
 # 方式四：从 Release 资产安装（tarball，无需 git、无需 npm 账号）
-dsh plugin --profile web add "https://github.com/Ycet/dsh-archive-manager/releases/download/v0.4.0/dsh-archive-manager-ycet-0.4.0.tgz"
+dsh plugin --profile web add "https://github.com/Ycet/dsh-archive-manager/releases/download/v0.4.1/dsh-archive-manager-ycet-0.4.1.tgz"
 ```
 
 包声明了 `dsh.bundle` 补丁层，`dsh plugin` 会自动把加载项合入 profile 的 bundle 层，无需手动编辑 `cordis.patch.yml`。方式二、三、四均无需 npm 账号；桌面端把 `--profile web` 换成 `--profile desktop`（使用桌面端自带 CLI）。
