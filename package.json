@@ -1,6 +1,6 @@
 {
   "name": "dsh-archive-manager-ycet",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "publishConfig": {
     "registry": "https://registry.npmjs.org/"
   },
@@ -25,7 +25,8 @@
     "cordis.patch.yml",
     "README.md",
     "README_en.md",
-    "LICENSE"
+    "LICENSE",
+    "assets/screenshot/"
   ],
   "exports": {
     ".": "./index.js",

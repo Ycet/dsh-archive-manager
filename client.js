@@ -345,7 +345,25 @@ window.__ModuleLoader__.load({
         display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 6,
         borderBottom: "1px solid var(--dsw-alias-border-l1, #0000000a)"
       },
-      rowTitle: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 14, color: "var(--dsw-alias-label-primary, #0f1115)" },
+      // 标题列本身不再裁剪：省略号交给内部 span，fixed 定位的悬停提示才不会被裁剪。
+      rowTitle: { flex: 1, minWidth: 0, fontSize: 14, color: "var(--dsw-alias-label-primary, #0f1115)" },
+      // 只有文字本身（含省略号区域）是悬停目标；inline-block + maxWidth 让短名称
+      // 不会占满整列，鼠标停在名称右侧空白处不会误触发提示。
+      rowTitleText: {
+        display: "inline-block", maxWidth: "100%", overflow: "hidden",
+        textOverflow: "ellipsis", whiteSpace: "nowrap", verticalAlign: "top",
+        lineHeight: "20px", cursor: "default"
+      },
+      // 会话名称悬停气泡：跟随鼠标的 fixed 定位，配色沿用 DSH 自带的 tooltip token。
+      titleTooltip: {
+        position: "fixed", zIndex: 9999, pointerEvents: "none",
+        maxWidth: "min(420px, calc(100vw - 32px))",
+        padding: "6px 10px", borderRadius: 8,
+        background: "var(--dsw-alias-tooltip-bg, #43454a)",
+        color: "var(--dsw-alias-tooltip-label, #fff)",
+        fontSize: 12, lineHeight: 1.5, overflowWrap: "anywhere",
+        boxShadow: "0 8px 24px rgba(0, 0, 0, 0.28)", whiteSpace: "normal", textAlign: "left"
+      },
       rowMeta: { flex: 1, fontSize: 12, color: "var(--dsw-alias-label-tertiary)", whiteSpace: "nowrap" },
       rowActions: { display: "flex", gap: 6, flexShrink: 0 },
       defaultButton: {
@@ -405,6 +423,132 @@ window.__ModuleLoader__.load({
           onMouseLeave: () => setHover(false)
         },
         children
+      );
+    }
+
+    // ---- 会话名称悬停提示 ----
+    // 原生 title 无法控制位置、样式与延迟，而且会和自绘提示重复；这里改为
+    // 悬停 250ms 后在鼠标位置展示完整标题，移出立即隐藏。
+    const TITLE_TOOLTIP_DELAY_MS = 250;
+    const TITLE_TOOLTIP_MARGIN = 8;
+    const TITLE_TOOLTIP_OFFSET_X = 14;
+    const TITLE_TOOLTIP_OFFSET_Y = 16;
+
+    /**
+     * 把提示气泡夹在视口内（四周至少留 margin 像素）。
+     * 纯函数，便于单元测试；宽高未知时传 0，渲染后会用实测尺寸再修正一次。
+     * @param {number} clientX 鼠标 X 坐标
+     * @param {number} clientY 鼠标 Y 坐标
+     * @param {number} width 气泡宽度
+     * @param {number} height 气泡高度
+     * @param {number} viewportWidth 视口宽度
+     * @param {number} viewportHeight 视口高度
+     * @returns {{ left: number, top: number }} 夹取后的 fixed 定位坐标
+     */
+    function titleTooltipPosition(clientX, clientY, width, height, viewportWidth, viewportHeight) {
+      // 视口比气泡还小时，max* 会小于 margin，用 max() 兜底到 margin，避免负坐标。
+      const maxLeft = Math.max(TITLE_TOOLTIP_MARGIN, viewportWidth - width - TITLE_TOOLTIP_MARGIN);
+      const maxTop = Math.max(TITLE_TOOLTIP_MARGIN, viewportHeight - height - TITLE_TOOLTIP_MARGIN);
+      return {
+        left: Math.min(Math.max(TITLE_TOOLTIP_MARGIN, clientX + TITLE_TOOLTIP_OFFSET_X), maxLeft),
+        top: Math.min(Math.max(TITLE_TOOLTIP_MARGIN, clientY + TITLE_TOOLTIP_OFFSET_Y), maxTop)
+      };
+    }
+
+    // 布局阶段测量气泡尺寸，避免首次出现时先落到视口外再跳回；
+    // 旧环境没有 useLayoutEffect 时退化为 useEffect。
+    const useTitleTooltipLayoutEffect = React.useLayoutEffect || React.useEffect;
+
+    // 会话名称 + 悬停提示。每个会话行独立维护自己的定时器与气泡状态，
+    // 互不影响；组件卸载时清理定时器，不挂全局监听。
+    function SessionTitle({ text }) {
+      const [tip, setTip] = React.useState(null); // {x,y,left,top} | null
+      const timerRef = React.useRef(0);
+      const pendingRef = React.useRef({ x: 0, y: 0 });
+      const sizeRef = React.useRef({ width: 0, height: 0 });
+      const measuredRef = React.useRef(false);
+      const tipRef = React.useRef(null);
+
+      const clearTimer = () => {
+        if (timerRef.current) {
+          clearTimeout(timerRef.current);
+          timerRef.current = 0;
+        }
+      };
+
+      // 按鼠标坐标 + 当前已知气泡尺寸计算最终位置。
+      const place = (clientX, clientY) => {
+        const width = typeof window === "undefined" ? 0 : window.innerWidth;
+        const height = typeof window === "undefined" ? 0 : window.innerHeight;
+        return {
+          x: clientX,
+          y: clientY,
+          ...titleTooltipPosition(clientX, clientY, sizeRef.current.width, sizeRef.current.height, width, height)
+        };
+      };
+
+      const onEnter = (event) => {
+        clearTimer();
+        pendingRef.current = { x: event.clientX, y: event.clientY };
+        timerRef.current = setTimeout(() => {
+          timerRef.current = 0;
+          setTip(place(pendingRef.current.x, pendingRef.current.y));
+        }, TITLE_TOOLTIP_DELAY_MS);
+      };
+
+      const onMove = (event) => {
+        // 延迟到点前移动鼠标：只更新「待显示位置」，气泡仍等 250ms；
+        // 已显示时：跟随鼠标更新位置。
+        pendingRef.current = { x: event.clientX, y: event.clientY };
+        if (!tip) return;
+        setTip(place(event.clientX, event.clientY));
+      };
+
+      const onLeave = () => {
+        clearTimer();
+        setTip(null);
+        measuredRef.current = false;
+      };
+
+      useTitleTooltipLayoutEffect(() => {
+        if (!tip || measuredRef.current) return;
+        const el = tipRef.current;
+        if (!el) return;
+        const rect = el.getBoundingClientRect();
+        sizeRef.current = { width: rect.width, height: rect.height };
+        measuredRef.current = true;
+        const next = titleTooltipPosition(
+          tip.x, tip.y, rect.width, rect.height,
+          window.innerWidth, window.innerHeight
+        );
+        if (Math.abs(next.left - tip.left) > 0.5 || Math.abs(next.top - tip.top) > 0.5) {
+          setTip((current) => (current ? { ...current, ...next } : current));
+        }
+      }, [tip]);
+
+      // 卸载时清掉未触发的定时器，避免对已卸载组件 setState。
+      React.useEffect(() => () => clearTimer(), []);
+
+      return React.createElement(
+        "div",
+        { style: styles.rowTitle },
+        React.createElement(
+          "span",
+          {
+            style: styles.rowTitleText,
+            onMouseEnter: onEnter,
+            onMouseMove: onMove,
+            onMouseLeave: onLeave
+          },
+          text
+        ),
+        tip
+          ? React.createElement("div", {
+              ref: tipRef,
+              role: "tooltip",
+              style: { ...styles.titleTooltip, left: tip.left, top: tip.top }
+            }, text)
+          : null
       );
     }
 
@@ -670,11 +814,8 @@ window.__ModuleLoader__.load({
       const rows = (items) =>
         items.map((s) =>
           React.createElement("div", { key: s.sessionId, style: styles.row },
-            React.createElement(
-              "div",
-              { style: styles.rowTitle, title: s.title },
-              s.title
-            ),
+            // 名称列：内部 span 负责省略号，悬停 250ms 后显示完整名称气泡。
+            React.createElement(SessionTitle, { text: s.title }),
             React.createElement("div", { style: styles.rowMeta },
               (s.createdAt ? t("createdLabel", { time: formatTime(s.createdAt) }) : "—")
             ),
@@ -933,6 +1074,8 @@ window.__ModuleLoader__.load({
     exports.SESSION_LS_PREFIXES = SESSION_LS_PREFIXES;
     exports.CURRENT_SESSION_KEY = CURRENT_SESSION_KEY;
     exports.purgeSessionLocalStorage = purgeSessionLocalStorage;
+    // 供测试直接验证会话名称悬停提示的视口夹取逻辑（浏览器侧无其他可观测入口）。
+    exports.titleTooltipPosition = titleTooltipPosition;
     return module.exports;
   }
 });

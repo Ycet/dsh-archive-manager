@@ -203,3 +203,26 @@ test("purgeSessionLocalStorage ignores a missing or malformed session id", async
     assert.equal(client.purgeSessionLocalStorage(null), 0);
   });
 });
+
+// ---- 会话名称悬停提示 ----
+// 气泡固定定位，必须夹在视口内：留 8px 边距，鼠标偏移 14px / 16px。
+
+test("titleTooltipPosition 按鼠标位置偏移并夹在视口内", async () => {
+  const client = await loadClientBundle();
+  const position = client.titleTooltipPosition;
+
+  // 鼠标居中：无夹取，坐标 = 鼠标 + 偏移。
+  assert.deepEqual(position(400, 300, 100, 40, 1000, 800), { left: 414, top: 316 });
+
+  // 右下角：夹取到 视口 - 气泡尺寸 - 8。
+  assert.deepEqual(position(990, 790, 100, 40, 1000, 800), { left: 892, top: 752 });
+
+  // 负坐标：夹取到 8px 安全边距。
+  assert.deepEqual(position(-10, -10, 100, 40, 1000, 800), { left: 8, top: 8 });
+
+  // 视口比气泡还小：仍回落到 8px 边距，不出现负坐标。
+  assert.deepEqual(position(50, 20, 200, 100, 100, 50), { left: 8, top: 8 });
+
+  // 首次显示时气泡尺寸未知（0）：右侧仍按视口宽度做保守夹取。
+  assert.deepEqual(position(990, 300, 0, 0, 1000, 800), { left: 992, top: 316 });
+});
