@@ -8,7 +8,7 @@
 A DSH settings page to view, filter, sort, unarchive and permanently delete archived sessions.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.4.2-blue.svg?style=for-the-badge)](package.json)
+[![Version](https://img.shields.io/badge/version-0.4.4-blue.svg?style=for-the-badge)](package.json)
 [![DSH](https://img.shields.io/badge/DSH-0.2.1--rc.2%2B-purple.svg?style=for-the-badge)](https://github.com/deepseek-ai/deepseek-harness)
 
 </div>
@@ -19,7 +19,7 @@ A DSH settings page to view, filter, sort, unarchive and permanently delete arch
 
 ![Archive page in DSH settings](assets/screenshot/archive-page.png)
 
-*Workspace-grouped archive list with the filter/sort toolbar; unarchive and delete actions are icon buttons. Session names in the screenshot are blurred.*
+*Workspace-grouped archive list with the filter/sort toolbar; unarchive and delete actions are icon buttons. The screenshot shows an earlier "Name" sort example; since 0.4.4 the page defaults to creation time ascending and the sort options spell out ascending/descending. Session names are blurred.*
 
 ---
 
@@ -44,7 +44,7 @@ A DSH settings page to view, filter, sort, unarchive and permanently delete arch
 |---------|-------------|
 | **Archive overview** | A new **Archive** page in Settings lists every archived session, grouped by workspace; sessions without a workspace go under "(Ungrouped)" |
 | **Filter** | Filter by "All workspaces", a specific workspace, or "Ungrouped"; the dropdown only lists workspaces that **own at least one archived session** |
-| **Sort** | Sort by session name (alphabetical) or creation time, ascending or descending |
+| **Sort** | Defaults to creation time ascending (oldest first); switch to name or creation time, ascending or descending |
 | **Name hover tooltip** | After 250 ms over a session name, the full title appears at the pointer (short names included); the bubble follows the cursor and stays inside the viewport |
 | **Unarchive** | Move a session out of the archive set so it **reappears in its workspace in the sidebar** and can be opened again |
 | **Delete one** | Red trash icon; after a second confirmation, permanently deletes that session and its chat history |
@@ -96,10 +96,10 @@ Open the address printed by `dsh web` (default <http://127.0.0.1:3080>), refresh
 dsh plugin --profile web add dsh-archive-manager-ycet@link:<absolute-path-to-plugin>
 
 # GitHub (pinned release tag; requires git)
-dsh plugin --profile web add "github:Ycet/dsh-archive-manager#v0.4.2"
+dsh plugin --profile web add "github:Ycet/dsh-archive-manager#v0.4.4"
 
 # Release asset (tarball; no git, no npm account)
-dsh plugin --profile web add "https://github.com/Ycet/dsh-archive-manager/releases/download/v0.4.2/dsh-archive-manager-ycet-0.4.2.tgz"
+dsh plugin --profile web add "https://github.com/Ycet/dsh-archive-manager/releases/download/v0.4.4/dsh-archive-manager-ycet-0.4.4.tgz"
 ```
 
 The package declares a `dsh.bundle` patch layer; `dsh plugin` merges the loader entry into the profile automatically — no manual editing of `cordis.patch.yml` is required.
@@ -128,7 +128,7 @@ None of these three options requires an npm account.
 | Control | Behavior |
 |---------|----------|
 | **Filter** | Defaults to "All workspaces"; switch to a specific workspace or "Ungrouped". The dropdown only lists workspaces with archived sessions, and "Ungrouped" appears only when such sessions exist |
-| **Sort** | By name or creation time, ascending or descending |
+| **Sort** | Defaults to creation time ascending; switch to name or creation time, ascending or descending |
 | **Delete all** (red trash icon) | Deletes **all** archived sessions regardless of the filter, after a second confirmation |
 
 ### Session rows and groups
@@ -296,6 +296,8 @@ The plugin needs **no environment variables or config files**, adds no public DS
 
 ## 🧾 Changelog
 
+- **0.4.4**: Fixed the sort dropdown copy by spelling out "ascending"/"descending" instead of using arrow glyphs, removing the ambiguity.
+- **0.4.3**: Entering the Archive page now sorts sessions inside each workspace by creation time ascending by default; the dropdown option order was adjusted.
 - **0.4.2**: Added a 250 ms hover tooltip for session names; the bubble follows the cursor and stays within the viewport; rebuilt both READMEs with a fresh UI screenshot.
 - **0.4.1**: Turned unarchive/delete actions into icon buttons; the delete confirm button now uses red text with a red outline on a transparent background.
 

@@ -82,10 +82,11 @@ window.__ModuleLoader__.load({
       filterUngrouped: "未分组",
       filterLabel: "筛选：",
       sortLabel: "排序：",
-      sortNameAsc: "按名称 ↑",
-      sortNameDesc: "按名称 ↓",
-      sortCreatedAsc: "按创建时间 ↑",
-      sortCreatedDesc: "按创建时间 ↓",
+      // 用「升序/降序」明确方向，避免 ↑/↓ 被误读为滚动方向或时间远近。
+      sortNameAsc: "名称：升序",
+      sortNameDesc: "名称：降序",
+      sortCreatedAsc: "创建时间：升序",
+      sortCreatedDesc: "创建时间：降序",
       deleteAll: "删除全部",
       deleteGroup: "删除本组",
       unarchive: "取消归档",
@@ -132,10 +133,11 @@ window.__ModuleLoader__.load({
       filterUngrouped: "Ungrouped",
       filterLabel: "Filter:",
       sortLabel: "Sort:",
-      sortNameAsc: "Name ↑",
-      sortNameDesc: "Name ↓",
-      sortCreatedAsc: "Created ↑",
-      sortCreatedDesc: "Created ↓",
+      // 英文文案同样用 ascending/descending 明确方向，避免 ↑/↓ 被误读。
+      sortNameAsc: "Name: ascending",
+      sortNameDesc: "Name: descending",
+      sortCreatedAsc: "Created time: ascending",
+      sortCreatedDesc: "Created time: descending",
       deleteAll: "Delete all",
       deleteGroup: "Delete group",
       unarchive: "Unarchive",
@@ -267,6 +269,9 @@ window.__ModuleLoader__.load({
       const pad = (n) => String(n).padStart(2, "0");
       return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
     }
+    // 归档页默认按创建时间升序（最早创建的在最前）。用户仍可在工具条切换
+    // 名称/创建时间的升序或降序；未知排序键也按创建时间升序兜底。
+    const DEFAULT_SORT = "createdAsc";
     function sortSessions(sessions, sortKey) {
       const arr = sessions.slice();
       switch (sortKey) {
@@ -283,7 +288,8 @@ window.__ModuleLoader__.load({
           arr.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
           break;
         default:
-          arr.sort((a, b) => String(a.title).localeCompare(String(b.title), "zh-Hans-CN"));
+          // 未知排序键也回落到创建时间升序。
+          arr.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
       }
       return arr;
     }
@@ -589,7 +595,7 @@ window.__ModuleLoader__.load({
         sessions: [],
         workspaces: [],
         filter: "",
-        sort: "nameAsc",
+        sort: DEFAULT_SORT,
         confirm: null, // { kind:'single'|'all'|'workspace', sessionId?, title?, workspaceId?, count?, sessionIds? }
         busy: false,
         notice: null
@@ -866,10 +872,11 @@ window.__ModuleLoader__.load({
               value: state.sort,
               onChange: (e) => set({ sort: e.target.value })
             },
-              React.createElement("option", { value: "nameAsc" }, t("sortNameAsc")),
-              React.createElement("option", { value: "nameDesc" }, t("sortNameDesc")),
+              // 默认项放在第一项，便于用户从下拉菜单直接看出当前默认排序。
               React.createElement("option", { value: "createdAsc" }, t("sortCreatedAsc")),
-              React.createElement("option", { value: "createdDesc" }, t("sortCreatedDesc"))
+              React.createElement("option", { value: "createdDesc" }, t("sortCreatedDesc")),
+              React.createElement("option", { value: "nameAsc" }, t("sortNameAsc")),
+              React.createElement("option", { value: "nameDesc" }, t("sortNameDesc"))
             )
           ),
           React.createElement("div", { style: styles.buttonsRow },
@@ -1076,6 +1083,9 @@ window.__ModuleLoader__.load({
     exports.purgeSessionLocalStorage = purgeSessionLocalStorage;
     // 供测试直接验证会话名称悬停提示的视口夹取逻辑（浏览器侧无其他可观测入口）。
     exports.titleTooltipPosition = titleTooltipPosition;
+    // 供测试验证归档页默认排序与排序比较逻辑。
+    exports.DEFAULT_SORT = DEFAULT_SORT;
+    exports.sortSessions = sortSessions;
     return module.exports;
   }
 });

@@ -8,7 +8,7 @@
 在 DSH 设置窗口新增「归档」页：查看、筛选、排序、取消归档并彻底删除已归档会话。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.4.2-blue.svg?style=for-the-badge)](package.json)
+[![Version](https://img.shields.io/badge/version-0.4.4-blue.svg?style=for-the-badge)](package.json)
 [![DSH](https://img.shields.io/badge/DSH-0.2.1--rc.2%2B-purple.svg?style=for-the-badge)](https://github.com/deepseek-ai/deepseek-harness)
 
 </div>
@@ -19,7 +19,7 @@
 
 ![「设置：归档」页面预览](assets/screenshot/archive-page.png)
 
-*按工作区分组的归档列表 + 筛选/排序工具条；取消归档与删除均为图标按钮。截图中的会话名称已做模糊处理。*
+*按工作区分组的归档列表 + 筛选/排序工具条；取消归档与删除均为图标按钮。截图中的排序为「按名称」示例，0.4.4 起默认按创建时间升序，排序选项文案改为「升序/降序」；会话名称已做模糊处理。*
 
 ---
 
@@ -44,7 +44,7 @@
 |------|------|
 | **归档总览** | 在设置窗口新增「归档」页，列出全部已归档会话，并按工作区（workspace）分组；不属于任何工作区的会话归入「(未分组)」 |
 | **筛选** | 按「全部工作区」、某个具体工作区或「未分组」过滤；筛选菜单只列出**至少有一个已归档会话**的工作区 |
-| **排序** | 按会话名称（字母序）或创建时间排序，支持升/降序 |
+| **排序** | 默认按创建时间升序（最早创建的在最前）；可切换名称或创建时间的升/降序 |
 | **名称悬停提示** | 鼠标在会话名称上停留 250ms 后，在鼠标位置显示完整名称（短名称同样显示）；气泡随鼠标移动并自动收进视口 |
 | **取消归档** | 一键把会话移出归档集合，会话**重新出现在侧边栏对应工作区**，可继续打开 |
 | **单条删除** | 红色垃圾桶图标；二次确认后彻底删除该会话及其聊天记录 |
@@ -96,10 +96,10 @@ dsh web
 dsh plugin --profile web add dsh-archive-manager-ycet@link:<absolute-path-to-plugin>
 
 # GitHub（锁定版本 tag，需要本机有 git）
-dsh plugin --profile web add "github:Ycet/dsh-archive-manager#v0.4.2"
+dsh plugin --profile web add "github:Ycet/dsh-archive-manager#v0.4.4"
 
 # Release 资产（tarball，无需 git、无需 npm 账号）
-dsh plugin --profile web add "https://github.com/Ycet/dsh-archive-manager/releases/download/v0.4.2/dsh-archive-manager-ycet-0.4.2.tgz"
+dsh plugin --profile web add "https://github.com/Ycet/dsh-archive-manager/releases/download/v0.4.4/dsh-archive-manager-ycet-0.4.4.tgz"
 ```
 
 包内声明了 `dsh.bundle` 补丁层，`dsh plugin` 会自动把加载项合入 profile，无需手动编辑 `cordis.patch.yml`。
@@ -128,7 +128,7 @@ dsh plugin --profile web add "https://github.com/Ycet/dsh-archive-manager/releas
 | 控件 | 行为 |
 |------|------|
 | **筛选** | 默认「全部工作区」；可切换某个工作区或「未分组」。菜单只列出有归档会话的工作区，且仅当存在未分组会话时才显示「未分组」 |
-| **排序** | 按名称 / 创建时间升序或降序 |
+| **排序** | 默认按创建时间升序；可切换名称/创建时间升序或降序 |
 | **删除全部**（红色垃圾桶图标） | 删除**全部**归档会话，不受筛选影响，需二次确认 |
 
 ### 会话行与分组
@@ -296,6 +296,8 @@ DSH 在 `session/disposed` 时用 fire-and-forget 方式落盘检查点（`void 
 
 ## 🧾 更新日志
 
+- **0.4.4**：修正排序下拉文案，改用「升序/降序」文字替代方向箭头，避免歧义。
+- **0.4.3**：进入归档页时，各工作区内的会话默认按创建时间升序排列；排序下拉选项顺序调整。
 - **0.4.2**：会话名称增加 250ms 悬停提示，气泡跟随鼠标并自动收进视口；中英文 README 重构并替换界面截图。
 - **0.4.1**：取消归档与删除按钮统一为图标；删除确认弹窗主按钮改为红字红描边透明底。
 

@@ -226,3 +226,28 @@ test("titleTooltipPosition 按鼠标位置偏移并夹在视口内", async () =>
   // 首次显示时气泡尺寸未知（0）：右侧仍按视口宽度做保守夹取。
   assert.deepEqual(position(990, 300, 0, 0, 1000, 800), { left: 992, top: 316 });
 });
+
+// ---- 归档页默认排序 ----
+// 进入归档页时，各工作区内的会话默认按创建时间升序（最早创建的在最前）。
+
+test("归档页默认按创建时间升序排序", async () => {
+  const client = await loadClientBundle();
+  assert.equal(client.DEFAULT_SORT, "createdAsc");
+
+  const sessions = [
+    { title: "最新", createdAt: 300 },
+    { title: "最早", createdAt: 100 },
+    { title: "中间", createdAt: 200 }
+  ];
+  const sorted = client.sortSessions(sessions, client.DEFAULT_SORT);
+  assert.deepEqual(sorted.map((s) => s.title), ["最早", "中间", "最新"]);
+
+  // 排序返回新数组，不修改调用方传入的会话列表。
+  assert.deepEqual(sessions.map((s) => s.title), ["最新", "最早", "中间"]);
+
+  // 未知排序键与默认行为一致，避免脏值回落到名称排序。
+  assert.deepEqual(
+    client.sortSessions(sessions, "unknown").map((s) => s.title),
+    ["最早", "中间", "最新"]
+  );
+});
